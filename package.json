@@ -1,0 +1,28 @@
+{
+  "name": "halcyon",
+  "version": "1.0.0",
+  "description": "Self-hosted realtime mesh voice/video platform. Local-first, zero-cloud.",
+  "type": "module",
+  "main": "server.js",
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "start": "node server.js",
+    "lint": "eslint . && prettier --check .",
+    "lint:fix": "eslint . --fix && prettier --write .",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test",
+    "test": "npm run test:unit && npm run test:e2e",
+    "verify": "node --check server.js && npm run lint && npm run test:unit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.10.0",
+    "selfsigned": "^2.4.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "eslint": "^10.4.0",
+    "prettier": "^3.8.3",
+    "vitest": "^4.1.7"
+  }
+}

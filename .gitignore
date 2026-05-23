@@ -1,0 +1,11 @@
+node_modules/
+data/
+certs/*.pem
+.vscode/
+.idea/
+tests/_artifacts/
+playwright-report/
+test-results/
+*.tmp
+.DS_Store
+Thumbs.db

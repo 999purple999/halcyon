@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Acoustic Radar · Chat Vocale Locale</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <!-- Sfondo soft ( niente più cosmic/blob, solo gradiente sobrio) -->
+    <div class="bg"></div>
+
+    <!-- ====================== JOIN ====================== -->
+    <div id="join-screen" class="screen">
+      <div class="join-card">
+        <h1>Acoustic Radar</h1>
+        <p class="subtitle">Chat vocale locale · P2P a latenza zero · stessa stanza</p>
+
+        <label for="nickname">Il tuo nome</label>
+        <input
+          id="nickname"
+          type="text"
+          maxlength="32"
+          placeholder="Es. Marco"
+          autocomplete="off"
+        />
+
+        <label for="mic-select">Microfono</label>
+        <select id="mic-select"></select>
+
+        <label class="checkbox" title="Consigliato quando siete nella stessa stanza">
+          <input id="aec-init" type="checkbox" checked />
+          <span>Soppressione eco/rumore (AEC) — consigliata in stanza</span>
+        </label>
+
+        <p class="join-hint">
+          📹 Camera e 📺 schermo si attivano dal control deck dopo l'ingresso.
+        </p>
+
+        <button id="join-btn">Entra nel radar</button>
+        <p id="join-error" class="error"></p>
+      </div>
+    </div>
+
+    <!-- ====================== ROOM ====================== -->
+    <div id="room-screen" class="screen hidden">
+      <!-- Header / diagnostica rete -->
+      <header class="topbar">
+        <div class="net">
+          <span id="lat-badge" class="lat" title="Latenza media verso i peer">
+            <span class="lat-dot"></span><span id="lat-val">— ms</span>
+          </span>
+          <span id="topo-badge" class="topo" title="Tipo di connessione">⛓ P2P diretto</span>
+          <span
+            id="ws-badge"
+            class="ws"
+            data-state="offline"
+            title="Stato della connessione di segnalazione"
+            >— offline</span
+          >
+          <span id="alone-badge" class="alone hidden" title="Nessun altro nella stanza">
+            👤 Sei solo qui
+          </span>
+          <span id="mix-vu" class="mix-vu" title="Livello audio in arrivo dal mix">
+            <span class="mix-vu-label">MIX</span>
+            <span class="mix-vu-bar"><span id="mix-vu-fill" class="mix-vu-fill"></span></span>
+          </span>
+          <button
+            id="test-beep-btn"
+            class="test-beep"
+            title="Riproduci un beep locale per testare l'audio output"
+          >
+            🔔 Test
+          </button>
+        </div>
+        <button id="room-id" class="room-id" title="Clicca per copiare il link d'invito">
+          🛰 <span id="room-id-text">Local-Node</span>
+        </button>
+        <button
+          id="chat-toggle"
+          class="chat-toggle"
+          title="Apri chat ()"
+          aria-label="Apri chat"
+        >
+          💬 Chat
+          <span id="chat-toggle-badge" class="chat-badge hidden">0</span>
+        </button>
+        <button
+          id="theme-btn"
+          class="theme-btn"
+          title="Cambia tema (default → matrix → cyberpunk → apple)"
+          aria-label="Cambia tema"
+        >
+          🎨
+        </button>
+        <button id="leave-btn" class="ghost">Esci</button>
+      </header>
+
+      <!-- Lobby: grid partecipanti () -->
+      <main class="lobby">
+        <div id="participants-grid" class="participants-grid" aria-label="Partecipanti"></div>
+        <div id="popover" class="popover hidden"></div>
+        <div id="copy-toast" class="toast hidden">Link copiato ✓</div>
+      </main>
+
+      <!-- Overlay fallback audio: appare se il browser blocca play() per
+         autoplay policy. Cliccando l'utente sblocca tutti gli audio el. -->
+      <div
+        id="audio-gate"
+        class="audio-gate hidden"
+        role="button"
+        tabindex="0"
+        aria-label="Tocca per attivare l'audio della stanza"
+      >
+        <div class="audio-gate-card">
+          <div class="audio-gate-icon">🔊</div>
+          <h3>Tocca per attivare l'audio</h3>
+          <p>
+            Il browser ha bloccato la riproduzione automatica.<br />
+            Un singolo click sblocca tutte le voci della stanza.
+          </p>
+          <button id="audio-gate-btn" class="audio-gate-btn">Attiva audio</button>
+        </div>
+      </div>
+
+      <!-- ===== Chat drawer () ===== -->
+      <aside id="chat-drawer" class="chat-drawer" aria-label="Chat della stanza">
+        <header class="chat-header">
+          <h3>💬 Chat</h3>
+          <button id="chat-close" class="chat-close" aria-label="Chiudi chat">✕</button>
+        </header>
+        <div id="chat-list" class="chat-list" role="log" aria-live="polite"></div>
+        <div id="chat-typing" class="chat-typing" aria-live="polite"></div>
+        <div class="chat-input-row">
+          <textarea
+            id="chat-input"
+            class="chat-input"
+            rows="2"
+            placeholder="Scrivi un messaggio… (Enter invia, Shift+Enter nuova riga)"
+            maxlength="4000"
+          ></textarea>
+        </div>
+      </aside>
+
+      <!-- ===== Video grid () ===== -->
+      <div id="video-grid" class="video-grid hidden" aria-label="Video dei partecipanti"></div>
+
+      <!-- ===== Stats Dashboard Debug () - toggle Ctrl+Shift+D ===== -->
+      <div id="stats-panel" class="stats-panel hidden" aria-label="Pannello statistiche">
+        <header class="stats-header">
+          <h3>📊 Stats · Debug</h3>
+          <span class="stats-hint">Ctrl+Shift+D toggle</span>
+          <button id="stats-close" class="stats-close" aria-label="Chiudi">✕</button>
+        </header>
+        <div class="stats-body">
+          <table class="stats-table">
+            <thead>
+              <tr>
+                <th>Peer</th>
+                <th>RTT</th>
+                <th>Loss</th>
+                <th>Jitter</th>
+                <th>kbps↓</th>
+                <th>kbps↑</th>
+                <th>Codec</th>
+              </tr>
+            </thead>
+            <tbody id="stats-tbody"></tbody>
+          </table>
+          <div class="stats-foot">
+            <span>WS: <span id="stats-ws">—</span></span>
+            <span>Mode: <span id="stats-mode">—</span></span>
+            <span>Errors: <span id="stats-errors">0</span></span>
+            <span>FPS render: <span id="stats-fps">—</span></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Control deck -->
+      <footer class="deck">
+        <div class="led-meter"><div id="self-meter" class="led-fill"></div></div>
+
+        <div class="deck-row">
+          <!-- Deafen -->
+          <div class="deck-item">
+            <select id="out-select" class="io-select" title="Uscita audio (cuffie)"></select>
+            <button id="deafen-btn" class="round-btn" title="Silenzia l'audio in arrivo">
+              <span class="ico">🔊</span>
+            </button>
+            <span class="deck-lbl">Audio</span>
+          </div>
+
+          <!-- Kill-switch (centro, grande) -->
+          <div class="deck-item">
+            <select id="mic-room-select" class="io-select" title="Microfono"></select>
+            <button id="mute-btn" class="round-btn big live" title="Microfono (Kill-Switch)">
+              <span class="ico">🎙</span>
+            </button>
+            <span class="deck-lbl">Microfono</span>
+          </div>
+
+          <!-- AEC toggle hardware -->
+          <div class="deck-item">
+            <button
+              id="aec-toggle"
+              class="hw-switch on"
+              role="switch"
+              aria-checked="true"
+              title="Acoustic Echo Cancellation"
+            >
+              <span class="knob"><span class="shield">🛡</span></span>
+            </button>
+            <span class="deck-lbl">AEC</span>
+          </div>
+
+          <!-- Camera toggle dinamico () -->
+          <div class="deck-item">
+            <button
+              id="camera-btn"
+              class="round-btn"
+              title="Attiva/disattiva camera (mesh P2P)"
+              aria-label="Camera"
+            >
+              <span class="ico">📹</span>
+            </button>
+            <span class="deck-lbl">Camera</span>
+          </div>
+
+          <!-- Screen share toggle () -->
+          <div class="deck-item">
+            <button
+              id="screen-share-btn"
+              class="round-btn"
+              title="Condividi schermo (mesh P2P)"
+              aria-label="Condividi schermo"
+            >
+              <span class="ico">📺</span>
+            </button>
+            <span class="deck-lbl">Schermo</span>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>
