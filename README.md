@@ -186,6 +186,19 @@ zero entries in the client error ring.
 
 ## Changelog
 
+### v1.2.1
+
+- **Fixed: screen-share never started**. `getDisplayMedia` was being
+  called with the same `VIDEO_PROFILE_HQ` constraints object as
+  `getUserMedia`, which contains `min:` keys for camera fallback. The
+  spec forbids `min` on `getDisplayMedia` → Chrome rejected with
+  `TypeError: min constraints are not supported`. The error was logged
+  but no user-visible toast surfaced it. Now the call uses an
+  `ideal`-only subset of the constraints, plus a video-only retry and
+  an error toast for any remaining failure mode.
+- New `tests/e2e/screen_share.spec.js` exercises the full click-to-tile
+  pipeline end-to-end using Chrome's fake-ui auto-accept.
+
 ### v1.2.0
 
 - **Fixed: screen-share / camera from the non-initiator peer**. The

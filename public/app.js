@@ -1273,29 +1273,62 @@ let screenStream = null;
 let screenSenders = []; // [{peerId, sender, pc, kind}]
 
 async function startScreenShare() {
-  if (screenStream) { return stopScreenShare(); }
-  //  1080p60 + audio capture (tab/system audio). Chrome chiede al
-  // utente se condividere anche l'audio della tab/monitor.
+  if (screenStream) return stopScreenShare();
+
+  // Robust acquisition strategy:
+  //   1) First try with audio enabled. NOTE: `displaySurface: 'monitor'` was
+  //      a HARD constraint that rejected with OverconstrainedError whenever
+  //      the user picked a Window or Tab. We dropped it: the browser still
+  //      shows all surface kinds in the picker, the user simply chooses.
+  //   2) If the request fails because of the audio constraint (some sources
+  //      like "Window" don't support system audio capture), retry without
+  //      audio so the user at least gets video.
+  //   3) NotAllowedError = user cancelled the picker → silent (it's their choice).
+  //   4) Any other error → visible toast so the user knows it didn't work.
+  //
+  // IMPORTANT: getDisplayMedia spec FORBIDS `min` constraints (only ideal/exact/max
+  // are accepted). VIDEO_PROFILE_HQ has `min` keys for getUserMedia/camera, so
+  // here we keep only the `ideal` subset. Without this filter Chrome rejects
+  // with TypeError: "min constraints are not supported" → screen-share never starts.
+  const videoConstraints = {
+    width: { ideal: VIDEO_PROFILE_HQ.width.ideal },
+    height: { ideal: VIDEO_PROFILE_HQ.height.ideal },
+    frameRate: { ideal: VIDEO_PROFILE_HQ.frameRate.ideal },
+  };
   try {
     screenStream = await navigator.mediaDevices.getDisplayMedia({
-      video: { ...VIDEO_PROFILE_HQ, displaySurface: 'monitor' },
-      audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-        sampleRate: 48000,
-      },
+      video: videoConstraints,
+      audio: true, // tab/system audio when supported
     });
   } catch (e) {
-    __ar.log.warn('[screen] getDisplayMedia rejected', e.name);
-    return;
+    if (e.name === 'NotAllowedError') {
+      __ar.log.info('[screen] picker cancelled by user');
+      return;
+    }
+    __ar.log.warn('[screen] first attempt failed, retrying video-only', e.name);
+    try {
+      screenStream = await navigator.mediaDevices.getDisplayMedia({
+        video: videoConstraints,
+        audio: false,
+      });
+    } catch (e2) {
+      if (e2.name === 'NotAllowedError') return;
+      __ar.log.error('[screen] getDisplayMedia failed', e2.name, e2.message);
+      showToast(`Screen share failed: ${e2.name}`);
+      return;
+    }
   }
+
   const videoTrack = screenStream.getVideoTracks()[0];
   const audioTrack = screenStream.getAudioTracks()[0];
-  if (!videoTrack) return;
+  if (!videoTrack) {
+    __ar.log.warn('[screen] stream has no video track');
+    showToast('Screen share failed: no video track returned');
+    return;
+  }
   const vs = videoTrack.getSettings?.() || {};
   __ar.log.info(
-    `[screen] acquisito ${vs.width}x${vs.height}@${vs.frameRate}fps, audio=${audioTrack ? 'sì' : 'no'}`,
+    `[screen] acquired ${vs.width}x${vs.height}@${vs.frameRate}fps, audio=${audioTrack ? 'yes' : 'no'}`,
   );
   videoTrack.addEventListener('ended', () => stopScreenShare());
   audioTrack?.addEventListener('ended', () => __ar.log.info('[screen] audio track ended'));
@@ -1319,9 +1352,25 @@ async function startScreenShare() {
   }
   ensureSelfScreenTile(screenStream);
   updateScreenShareUi(true);
+  announce(audioTrack ? 'Screen + audio shared' : 'Screen shared');
   __ar.log.info(
-    `[screen] sharing avviato, peers=${targets.length}, tracks=${videoTrack ? 1 : 0}v+${audioTrack ? 1 : 0}a`,
+    `[screen] sharing started, peers=${targets.length}, tracks=${videoTrack ? 1 : 0}v+${audioTrack ? 1 : 0}a`,
   );
+}
+
+// Lightweight toast helper for transient errors. Reuses the copy-toast styling.
+function showToast(text, ms = 2400) {
+  let toast = document.getElementById('copy-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'copy-toast';
+    toast.className = 'toast';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = text;
+  toast.classList.remove('hidden');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => toast.classList.add('hidden'), ms);
 }
 
 function stopScreenShare() {

@@ -1,6 +1,6 @@
 {
   "name": "halcyon",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Self-hosted realtime mesh voice/video platform. Local-first, zero-cloud.",
   "type": "module",
   "main": "server.js",
