@@ -101,7 +101,10 @@ body {
   position: relative;
 }
 
-/* ===================== SFONDO ( sobrio, niente cosmic) ===================== */
+/* ===================== SFONDO sobrio (aurora + halo) ===================== */
+/* Aurora ridotta a un singolo livello: niente .bg::after (10 radial-gradient
+   con animation drift 120s = paint costantemente accesa). prefers-reduced-motion
+   disattiva l'aurora — vedi blocco a fondo file. */
 .bg {
   position: fixed;
   inset: 0;
@@ -116,128 +119,23 @@ body {
   position: absolute;
   inset: -40%;
   background:
-    radial-gradient(35% 45% at 18% 28%, rgba(106, 163, 255, 0.45), transparent 65%),
-    radial-gradient(40% 50% at 82% 22%, rgba(176, 108, 255, 0.4), transparent 65%),
-    radial-gradient(55% 55% at 50% 90%, rgba(54, 211, 153, 0.28), transparent 70%),
-    radial-gradient(30% 30% at 50% 50%, rgba(255, 200, 120, 0.1), transparent 70%);
-  filter: blur(50px);
-  animation: aurora 28s ease-in-out infinite alternate;
-}
-.bg::after {
-  /* polvere stellare densa di sfondo */
-  content: '';
-  position: absolute;
-  inset: 0;
-  opacity: 0.55;
-  pointer-events: none;
-  background-image:
-    radial-gradient(1px 1px at 12% 18%, rgba(255, 255, 255, 0.8) 50%, transparent 51%),
-    radial-gradient(1px 1px at 23% 67%, rgba(255, 255, 255, 0.6) 50%, transparent 51%),
-    radial-gradient(1px 1px at 41% 32%, rgba(180, 200, 255, 0.7) 50%, transparent 51%),
-    radial-gradient(1.5px 1.5px at 55% 78%, rgba(255, 255, 255, 0.9) 50%, transparent 51%),
-    radial-gradient(1px 1px at 67% 14%, rgba(200, 180, 255, 0.7) 50%, transparent 51%),
-    radial-gradient(1px 1px at 78% 56%, rgba(255, 255, 255, 0.5) 50%, transparent 51%),
-    radial-gradient(1px 1px at 89% 89%, rgba(255, 255, 255, 0.7) 50%, transparent 51%),
-    radial-gradient(1.5px 1.5px at 8% 92%, rgba(180, 255, 220, 0.6) 50%, transparent 51%),
-    radial-gradient(1px 1px at 33% 8%, rgba(255, 255, 255, 0.5) 50%, transparent 51%),
-    radial-gradient(1px 1px at 92% 35%, rgba(255, 220, 200, 0.6) 50%, transparent 51%);
-  background-size: 100% 100%;
-  animation: drift 120s linear infinite;
+    radial-gradient(35% 45% at 18% 28%, rgba(106, 163, 255, 0.35), transparent 65%),
+    radial-gradient(40% 50% at 82% 22%, rgba(176, 108, 255, 0.3), transparent 65%),
+    radial-gradient(55% 55% at 50% 90%, rgba(54, 211, 153, 0.22), transparent 70%);
+  filter: blur(60px);
+  animation: aurora 36s ease-in-out infinite alternate;
+  will-change: transform;
 }
 @keyframes aurora {
   0% {
     transform: rotate(0deg) scale(1) translate(0, 0);
   }
   50% {
-    transform: rotate(10deg) scale(1.2) translate(2%, -3%);
+    transform: rotate(8deg) scale(1.12) translate(2%, -2%);
   }
   100% {
-    transform: rotate(-8deg) scale(1.12) translate(-2%, 2%);
+    transform: rotate(-6deg) scale(1.06) translate(-2%, 2%);
   }
-}
-@keyframes drift {
-  0% {
-    transform: translate(0, 0);
-  }
-  100% {
-    transform: translate(-50%, -30%);
-  }
-}
-.blob {
-  position: fixed;
-  border-radius: 50%;
-  filter: blur(90px);
-  opacity: 0.55;
-  z-index: -1;
-  mix-blend-mode: screen;
-  animation: float 22s ease-in-out infinite;
-}
-.blob.b1 {
-  width: 520px;
-  height: 520px;
-  background: var(--accent);
-  top: -180px;
-  left: -160px;
-}
-.blob.b2 {
-  width: 460px;
-  height: 460px;
-  background: var(--accent-2);
-  bottom: -200px;
-  right: -120px;
-  animation-delay: -7s;
-}
-.blob.b3 {
-  width: 380px;
-  height: 380px;
-  background: var(--accent-3);
-  top: 35%;
-  left: 55%;
-  animation-delay: -13s;
-}
-@keyframes float {
-  0%,
-  100% {
-    transform: translate(0, 0) scale(1);
-  }
-  33% {
-    transform: translate(80px, -60px) scale(1.15);
-  }
-  66% {
-    transform: translate(-60px, 70px) scale(0.92);
-  }
-}
-
-/* Vignettatura cinematografica sopra l'arena */
-.vignette {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 2;
-  background: radial-gradient(
-    ellipse 70% 60% at 50% 50%,
-    transparent 30%,
-    rgba(0, 0, 0, 0.45) 75%,
-    rgba(0, 0, 0, 0.85) 100%
-  );
-  mix-blend-mode: multiply;
-}
-/* sottilissima scanline orizzontale che attraversa lentamente -> sensazione "monitor" */
-.scanline {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 100%;
-  pointer-events: none;
-  z-index: 3;
-  background: repeating-linear-gradient(
-    to bottom,
-    transparent 0,
-    transparent 3px,
-    rgba(255, 255, 255, 0.012) 4px
-  );
-  mix-blend-mode: overlay;
-  opacity: 0.6;
 }
 
 .screen {
@@ -673,19 +571,6 @@ body {
   50% {
     transform: scale(1.12);
   }
-}
-
-/* ===================== ARENA / RADAR (LEGACY, NON USATA) ===================== */
-.arena {
-  flex: 1 1 0;
-  position: relative;
-  min-height: 0;
-  z-index: 1;
-}
-#radar {
-  display: block;
-  width: 100%;
-  height: 100%;
 }
 
 /* Popover per-utente (volume / rename) */
@@ -1145,44 +1030,6 @@ body {
   border: 1px solid rgba(255, 209, 102, 0.4);
   color: var(--warn);
   animation: alone-pulse 3s ease-in-out infinite;
-}
-/* VU meter del MIX audio in arrivo ( fix) — l'utente VEDE se
-   l'audio sta arrivando dal server, anche quando l'output e' muto */
-.mix-vu {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 10px;
-  font-weight: 700;
-  padding: 5px 9px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--glass-brd);
-  color: var(--muted);
-}
-.mix-vu-label {
-  letter-spacing: 1px;
-}
-.mix-vu-bar {
-  width: 60px;
-  height: 8px;
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 4px;
-  overflow: hidden;
-}
-.mix-vu-fill {
-  display: block;
-  height: 100%;
-  width: 0%;
-  background: linear-gradient(
-    90deg,
-    var(--accent-3) 0%,
-    var(--accent-3) 55%,
-    var(--warn) 78%,
-    var(--danger) 100%
-  );
-  background-attachment: fixed;
-  transition: width 0.06s linear;
 }
 .test-beep {
   display: inline-flex;
@@ -1708,5 +1555,84 @@ body.ptt-active::after {
   .room-id {
     max-width: 130px;
     overflow: hidden;
+  }
+}
+
+/* ===================== ACCESSIBILITY ===================== */
+
+/* Focus indicator visibile (keyboard nav). Si applica solo a focus-visible,
+   non a focus normale, per evitare l'outline su click del mouse. */
+:where(button, [role='button'], input, select, textarea, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+
+/* Skip link per screen reader / keyboard nav — invisibile finché non riceve focus */
+.skip-link {
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: 10px 14px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  z-index: 100;
+  transform: translateY(-120%);
+  transition: transform 0.18s;
+}
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+/* Screen-reader-only (annunci aria-live invisibili) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ===================== REDUCE MOTION ===================== */
+/* Rispetto della preferenza utente: niente aurora, niente shimmer del titolo,
+   niente entrance/slide/pulse. Mantiene SOLO il transition utility (hover ~150ms)
+   perché disorientante perderli e niente animazioni-continue (drain CPU). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .bg::before {
+    animation: none !important;
+    transform: none !important;
+  }
+  .join-card h1 {
+    background-position: 0 0 !important;
+  }
+}
+
+/* ===================== HIGH CONTRAST ===================== */
+@media (prefers-contrast: more) {
+  :root {
+    --glass-brd: rgba(255, 255, 255, 0.4);
+    --muted: #b8bdd0;
+  }
+  .ws,
+  .lat,
+  .topo,
+  .room-id,
+  .test-beep,
+  .chat-toggle,
+  .theme-btn {
+    border-width: 2px;
   }
 }

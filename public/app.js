@@ -1,14 +1,11 @@
 // ============================================================================
-// HALCYON
-//  - Radar Canvas con nodi audio-reattivi
-//  - Echo/feedback detection (linea di tensione rossa tra mic correlati)
-//  - Latenza + topologia da getStats, AEC toggle, switch device, Opus max
+// HALCYON — client mesh P2P
+//  - WebRTC P2P audio + video + screen-share (mesh, no SFU)
+//  - Logger leveled + ring buffer di 50 errori esposto su window.__ar
+//  - Profilo persistente (UUID + preferences) sync con /api/settings
+//  - Chat per-stanza con markdown XSS-safe, edit/delete, reactions
 //
-//   (hardening): wrapper logger window.__ar.log silenziabile
-//  - precedenza livello: URL ?log=debug|info|warn|error > localStorage
-//    "ar:logLevel" > "info"
-//  - ring buffer di 50 errori (unhandledrejection + error) in __ar.state.errors
-//  - console.error nativo SOLO per errori catastrofici (boot URL fallita)
+// Livello logger: URL ?log=debug|info|warn|error > localStorage > "info"
 // ============================================================================
 
 // ---------- LOGGER (vedi raffinamento  §1.Step6) ----------
@@ -219,6 +216,21 @@ function saveProfile(immediate = false) {
 window.__ar.profile = () => ({ userId: profile.userId, data: { ...profile.data }, serverReachable: profile._serverReachable });
 window.__ar.saveProfile = saveProfile;
 
+// ---------- A11y: live-region announcer (toggle/stato a screen reader) ----------
+let _announceT = null;
+function announce(text) {
+  const el = document.getElementById('aria-live-status');
+  if (!el) return;
+  clearTimeout(_announceT);
+  // Doppio update: vuoto + delay obbliga VoiceOver/NVDA a parlare anche se il
+  // testo precedente era identico (sennò la live-region viene "ignorata").
+  el.textContent = '';
+  _announceT = setTimeout(() => {
+    el.textContent = text;
+  }, 30);
+}
+window.__ar.announce = announce;
+
 // ---------- Stato ----------
 const peers = new Map();   // id -> peer object (vedi makePeer)
 let ws = null, myId = null, myName = '';
@@ -288,17 +300,18 @@ async function acquireStream(deviceId) {
 async function replaceLocalStream(newStream) {
   const newTrack = newStream.getAudioTracks()[0];
   newTrack.enabled = micEnabled;
-  if (mode === 'sfu' && serverPc) {
-    const s = serverPc.getSenders().find(s => s.track && s.track.kind === 'audio');
-    if (s) { try { await s.replaceTrack(newTrack); } catch (e) { __ar.log.warn('replaceTrack sfu', e); } }
-  } else {
-    for (const peer of peers.values()) {
-      if (!peer.pc) continue;
-      const sender = peer.pc.getSenders().find(s => s.track && s.track.kind === 'audio');
-      if (sender) { try { await sender.replaceTrack(newTrack); } catch (e) { __ar.log.warn('replaceTrack mesh peer=' + peer.name, e); } }
+  for (const peer of peers.values()) {
+    if (!peer.pc) continue;
+    const sender = peer.pc.getSenders().find((s) => s.track && s.track.kind === 'audio');
+    if (sender) {
+      try {
+        await sender.replaceTrack(newTrack);
+      } catch (e) {
+        __ar.log.warn('replaceTrack mesh peer=' + peer.name, e);
+      }
     }
   }
-  localStream.getTracks().forEach(t => t.stop());
+  localStream.getTracks().forEach((t) => t.stop());
   localStream = newStream;
   setupSelfAnalyser();
 }
@@ -308,7 +321,10 @@ async function replaceLocalStream(newStream) {
 // ============================================================================
 $('join-btn').addEventListener('click', async () => {
   const name = $('nickname').value.trim();
-  if (!name) { $('join-error').textContent = 'Scrivi un nome.'; return; }
+  if (!name) {
+    $('join-error').textContent = 'Please enter a name.';
+    return;
+  }
   myName = name; self.name = name;
   aecOn = $('aec-init').checked;
   //  camera non più al join, ma da control deck (#camera-btn)
@@ -317,7 +333,7 @@ $('join-btn').addEventListener('click', async () => {
   try {
     localStream = await acquireStream($('mic-select').value);
   } catch (err) {
-    $('join-error').textContent = 'Microfono non accessibile: ' + err.message;
+    $('join-error').textContent = 'Microphone not accessible: ' + err.message;
     $('join-btn').disabled = false; return;
   }
   setupSelfAnalyser();
@@ -327,9 +343,8 @@ $('join-btn').addEventListener('click', async () => {
   initRoomId();
   joinScreen.classList.add('hidden');
   roomScreen.classList.remove('hidden');
-  resizeCanvas();
-  requestAnimationFrame(tick);
-  setInterval(pollStats, 1500);
+  rafHandle = requestAnimationFrame(tick);
+  pollStatsTimer = setInterval(pollStats, 1500);
 });
 $('nickname').addEventListener('keydown', e => { if (e.key === 'Enter') $('join-btn').click(); });
 
@@ -340,14 +355,6 @@ $('nickname').addEventListener('keydown', e => { if (e.key === 'Enter') $('join-
 //   WS reconnect con backoff esponenziale + jitter, sessionToken per
 //  identificare la stessa sessione attraverso reconnect (no peer fantasma).
 // ============================================================================
-//  solo modalita' mesh P2P. Studio Python :8444 (SFU) deprecato.
-// Manteniamo la variabile per compatibilita' con il codice esistente ma il
-// client si comporta sempre come 'mesh'.
-let mode = 'mesh';
-const serverPc = null;        // mai usato dopo unify
-let micAttached = false;      // legacy, niente piu' SFU
-const midToPeer = new Map();  // legacy
-
 // --- Reconnect state ---
 const sessionToken = (() => {
   // sessione effimera: cambia ad ogni reload del tab, identica fra reconnect WS.
@@ -367,8 +374,11 @@ function setWsState(s) {
   if (!el) return;
   el.dataset.state = s;
   const TXT = {
-    online: '🟢 Online', connecting: '⏳ Connessione…',
-    reconnecting: '🟡 Riconnessione…', dead: '🔴 Offline', offline: '— offline',
+    online: '🟢 Online',
+    connecting: '⏳ Connecting…',
+    reconnecting: '🟡 Reconnecting…',
+    dead: '🔴 Offline',
+    offline: '— offline',
   };
   el.textContent = TXT[s] || s;
 }
@@ -428,22 +438,29 @@ function openSocket() {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
     switch (msg.type) {
       case 'welcome':
-        //  forziamo sempre 'mesh' lato client, ignoriamo
-        // qualsiasi modalita' SFU dal server. Single port :8443.
-        myId = msg.id; mode = 'mesh';
-        document.body.dataset.mode = mode;
+        myId = msg.id;
+        document.body.dataset.mode = 'mesh';
         for (const p of msg.peers) ensurePeerMesh(p.id, p.name, false);
         if (msg.resumed) __ar.log.info('welcome: sessione ripristinata id=' + msg.id);
         break;
       case 'peer-joined':
         ensurePeerMesh(msg.id, msg.name, true);
+        updateAloneBadge();
         break;
-      case 'peer-renamed': { const p = peers.get(msg.id); if (p) p.name = msg.name; break; }
-      case 'peer-left': removePeer(msg.id); break;
-      case 'signal': await handleSignal(msg.from, msg.data); break;  // mesh
-      case 'offer': await handleServerOffer(msg); break;             // sfu
-      case 'levels': handleLevels(msg.levels); break;                // sfu
-      case 'pong': break;                                            // keep-alive ack
+      case 'peer-renamed': {
+        const p = peers.get(msg.id);
+        if (p) p.name = msg.name;
+        break;
+      }
+      case 'peer-left':
+        removePeer(msg.id);
+        updateAloneBadge();
+        break;
+      case 'signal':
+        await handleSignal(msg.from, msg.data);
+        break;
+      case 'pong':
+        break;
       //  chat
       case 'chat:msg': onChatMessage(msg); break;
       case 'chat:history:resp': onChatHistory(msg.items || []); break;
@@ -473,17 +490,9 @@ function connectSignaling() {
   }
 }
 
-// In SFU il radar riceve i livelli dei peer dal server (l'audio arriva mixato,
-// quindi non possiamo computare l'RMS per-peer in locale).
-function handleLevels(levels) {
-  if (!levels) return;
-  for (const [pid, rms] of Object.entries(levels)) {
-    const p = peers.get(pid); if (!p) continue;
-    p.rms = rms;
-    p.speaking = rms > SPEAK_TH;
-  }
+function signal(to, data) {
+  ws.send(JSON.stringify({ type: 'signal', to, data }));
 }
-function signal(to, data) { ws.send(JSON.stringify({ type: 'signal', to, data })); }
 
 // ---------- nodo (display + audio), comune alle due modalita' ----------
 function makeNode(name) {
@@ -496,12 +505,33 @@ function makeNode(name) {
 }
 function ensureNode(id, name) {
   let n = peers.get(id);
-  if (n) { if (name) n.name = name; return n; }
-  n = makeNode(name); peers.set(id, n); return n;
+  if (n) {
+    if (name) n.name = name;
+    return n;
+  }
+  n = makeNode(name);
+  n.id = id; // expose Map key on the value (used by startScreenShare/startCamera logs + e2e API)
+  peers.set(id, n);
+  return n;
 }
 
 // ============================================================================
-//  WEBRTC MESH (server Node)
+//  WEBRTC MESH — perfect negotiation pattern (W3C)
+//
+//  Why: the previous version registered `negotiationneeded` ONLY for the
+//  initiator. When the non-initiator added a new track (camera, screen-share),
+//  the event fired but no listener was attached → no SDP renegotiation → the
+//  remote peer never received the new tracks. Result: clicking "Share screen"
+//  on the second peer did nothing.
+//
+//  Fix: both sides listen to `negotiationneeded`. Glare (simultaneous offers)
+//  is handled the spec-recommended way:
+//   - "polite" side (non-initiator) accepts the incoming offer even mid-negotiation
+//     (modern Chrome auto-rolls back the local pending offer).
+//   - "impolite" side (initiator) ignores incoming offers during glare.
+//  Initial setup is unchanged: only the initiator's first negotiationneeded
+//  produces the bootstrap offer because the non-initiator's pc adds the local
+//  tracks after the remote SDP arrives in welcome.
 // ============================================================================
 function ensurePeerMesh(id, name, initiator) {
   if (peers.has(id) && peers.get(id).pc) return peers.get(id);
@@ -509,135 +539,125 @@ function ensurePeerMesh(id, name, initiator) {
   const pc = new RTCPeerConnection(RTC_CONFIG);
   peer.pc = pc;
   peer.isInitiator = !!initiator;
-  peer.iceRestartPending = false;
+  peer._isPolite = !initiator;
+  peer._makingOffer = false;
   for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
-  pc.addEventListener('icecandidate', e => { if (e.candidate) signal(id, { candidate: e.candidate }); });
+  pc.addEventListener('icecandidate', (e) => {
+    if (e.candidate) signal(id, { candidate: e.candidate });
+  });
   pc.addEventListener('track', (e) => {
     const stream = e.streams[0] || new MediaStream([e.track]);
-    if (e.track.kind === 'video') attachRemoteVideo(id, stream);
-    else attachRemoteAudio(id, stream);
+    if (e.track.kind === 'video') {
+      attachRemoteVideo(id, stream);
+    } else {
+      // Audio track. If the stream also carries video, it belongs to a screen-share —
+      // the audio rides on the same MediaStream as the video and will be played by
+      // the remote <video> element (which we keep un-muted). Routing it to the
+      // mic <audio> element would overwrite the mic playback (srcObject is exclusive).
+      if (stream.getVideoTracks().length > 0) {
+        __ar.log.info(`[track] screen-share audio peer=${id} (plays via video tile)`);
+      } else {
+        attachRemoteAudio(id, stream);
+      }
+    }
   });
-  //  su failed l'initiator triggera ICE restart. Il non-initiator
-  // attende: la sua negotiationneeded scattera dopo che l'altro lato emette
-  // la nuova offer con iceRestart. Su 'disconnected' aspettiamo 5s: spesso
-  // si riprende da solo (mobility transient), altrimenti escaliamo a failed.
   pc.addEventListener('connectionstatechange', () => {
     const st = pc.connectionState;
     __ar.log.debug(`peer=${id} conn=${st}`);
     if (st === 'failed') tryIceRestart(peer, id);
     else if (st === 'disconnected') {
-      setTimeout(() => { if (pc.connectionState === 'disconnected') tryIceRestart(peer, id); }, 5000);
+      setTimeout(() => {
+        if (pc.connectionState === 'disconnected') tryIceRestart(peer, id);
+      }, 5000);
     }
   });
-  pc.addEventListener('iceconnectionstatechange', () => __ar.log.debug(`peer=${id} ice=${pc.iceConnectionState}`));
-  if (initiator) {
-    pc.addEventListener('negotiationneeded', async () => {
-      try {
-        // Se siamo qui per un ICE restart, createOffer({iceRestart:true}) e'
-        // gia stato chiamato manualmente -> NON rilanciare: leggiamo solo lo
-        // stato corrente e propaghiamo. Altrimenti negoziazione standard.
-        if (peer.iceRestartPending) { peer.iceRestartPending = false; return; }
-        const o = await pc.createOffer();
-        await pc.setLocalDescription(tuneOpus(o));
-        signal(id, { sdp: pc.localDescription });
-      } catch (e) { __ar.log.error(`createOffer peer=${id}`, e); }
-    });
-  }
+  pc.addEventListener('iceconnectionstatechange', () =>
+    __ar.log.debug(`peer=${id} ice=${pc.iceConnectionState}`),
+  );
+
+  // Universal negotiationneeded handler. Fires for:
+  //   - initial setup (initiator)
+  //   - addTrack from either side (camera, screen-share)
+  //   - restartIce() from either side
+  // The signalingState=stable guard prevents racing with an inbound offer.
+  pc.addEventListener('negotiationneeded', async () => {
+    try {
+      peer._makingOffer = true;
+      const o = await pc.createOffer();
+      if (pc.signalingState !== 'stable') return; // re-entry safety
+      await pc.setLocalDescription(tuneOpus(o));
+      maximizeBitrate(pc);
+      signal(id, { sdp: pc.localDescription });
+    } catch (e) {
+      __ar.log.error(`negotiationneeded peer=${id}`, e);
+    } finally {
+      peer._makingOffer = false;
+    }
+  });
   return peer;
 }
 
-//  ICE restart helper. Initiator-side: pc.restartIce() triggera
-// negotiationneeded che noi intercettiamo per inviare un offer con
-// a=ice-ufrag/pwd nuovi. Non-initiator-side: nessun-op (attende).
+// ICE restart helper. Either side can call: restartIce() sets internal state
+// so the next negotiationneeded produces an ICE-restart offer automatically.
 async function tryIceRestart(peer, id) {
-  if (!peer || !peer.pc) return;
-  if (!peer.isInitiator) {
-    __ar.log.warn(`peer=${id} failed: non sono initiator, attendo offer`);
-    return;
-  }
-  if (peer.iceRestartPending) return;
-  peer.iceRestartPending = true;
+  if (!peer?.pc) return;
   try {
     if (typeof peer.pc.restartIce === 'function') {
       peer.pc.restartIce();
-      // restartIce() innesca negotiationneeded async che fara' la nuova offer
-      // -- usiamo manualmente createOffer per garantire iceRestart:true.
-      const o = await peer.pc.createOffer({ iceRestart: true });
-      await peer.pc.setLocalDescription(tuneOpus(o));
     } else {
+      // Legacy fallback (very old browsers). Modern Chrome 124+ always has restartIce.
       const o = await peer.pc.createOffer({ iceRestart: true });
+      if (peer.pc.signalingState !== 'stable') return;
       await peer.pc.setLocalDescription(tuneOpus(o));
+      signal(id, { sdp: peer.pc.localDescription });
     }
-    signal(id, { sdp: peer.pc.localDescription });
-    __ar.log.info(`peer=${id} ICE restart inviato`);
+    __ar.log.info(`peer=${id} ICE restart triggered`);
   } catch (e) {
-    __ar.log.error(`peer=${id} ICE restart fallito`, e);
-    peer.iceRestartPending = false;
+    __ar.log.error(`peer=${id} ICE restart failed`, e);
   }
 }
+
 async function handleSignal(from, data) {
-  const peer = peers.get(from); if (!peer || !peer.pc) return;
+  const peer = peers.get(from);
+  if (!peer || !peer.pc) return;
   const pc = peer.pc;
-  if (data.sdp) {
-    await pc.setRemoteDescription(data.sdp);
-    if (data.sdp.type === 'offer') {
-      const a = await pc.createAnswer(); await pc.setLocalDescription(tuneOpus(a));
-      maximizeBitrate(pc); signal(from, { sdp: pc.localDescription });
-    } else { maximizeBitrate(pc); }
-  } else if (data.candidate) {
-    try { await pc.addIceCandidate(data.candidate); } catch (e) { __ar.log.warn(`addIceCandidate peer=${from}`, e); }
-  }
-}
-
-// ============================================================================
-//  WEBRTC SFU/STUDIO (server Python + DeepFilterNet) — server e' l'offerer
-// ============================================================================
-let mixAudioEl = null;
-let mixAnalyser = null;
-let mixAnalyserBuf = null;
-let mixAudioCtx = null;
-function attachMixAudio(stream) {
-  if (!mixAudioEl) {
-    mixAudioEl = document.createElement('audio');
-    mixAudioEl.autoplay = true;
-    mixAudioEl.playsInline = true;
-    document.body.appendChild(mixAudioEl);
-  }
-  mixAudioEl.srcObject = stream;
-  mixAudioEl.volume = deafened ? 0 : 1;
-  if (outputSinkId && mixAudioEl.setSinkId) mixAudioEl.setSinkId(outputSinkId).catch(() => {});
-  tryPlayAudio(mixAudioEl, '[mix]');
-  __ar.log.info('[mix] audio studio agganciato, tracks=' + stream.getAudioTracks().length);
-  //  fix utente: setup VU meter del mix per diagnostica visiva.
-  // L'utente VEDE se l'audio sta arrivando anche se non lo sente (problema
-  // output device, volume sistema, deafen attivo, etc.).
+  // Wrap the entire body. Any unhandled rejection would be caught by
+  // window.unhandledrejection and pollute __ar.state.errors (we use that ring
+  // as a CI invariant in e2e tests).
   try {
-    if (mixAudioCtx) mixAudioCtx.close().catch(() => {});
-    mixAudioCtx = new AudioContext();
-    const src = mixAudioCtx.createMediaStreamSource(stream);
-    mixAnalyser = mixAudioCtx.createAnalyser();
-    mixAnalyser.fftSize = 512;
-    src.connect(mixAnalyser);
-    mixAnalyserBuf = new Uint8Array(mixAnalyser.frequencyBinCount);
-  } catch (e) { __ar.log.warn('[mix] VU analyser setup failed', e); }
-}
-
-//  fix utente: aggiorna VU meter del mix ogni frame (chiamato dal tick).
-function updateMixVu() {
-  if (!mixAnalyser || !mixAnalyserBuf) return;
-  mixAnalyser.getByteTimeDomainData(mixAnalyserBuf);
-  let sum = 0;
-  for (let i = 0; i < mixAnalyserBuf.length; i++) {
-    const v = (mixAnalyserBuf[i] - 128) / 128;
-    sum += v * v;
+    if (data.sdp) {
+      const isOffer = data.sdp.type === 'offer';
+      const offerCollision = isOffer && (peer._makingOffer || pc.signalingState !== 'stable');
+      if (!peer._isPolite && offerCollision) {
+        __ar.log.debug(`peer=${from} ignoring colliding offer (impolite)`);
+        return;
+      }
+      await pc.setRemoteDescription(data.sdp); // implicit rollback if polite + collision
+      if (isOffer) {
+        const a = await pc.createAnswer();
+        await pc.setLocalDescription(tuneOpus(a));
+        maximizeBitrate(pc);
+        signal(from, { sdp: pc.localDescription });
+      } else {
+        maximizeBitrate(pc);
+      }
+    } else if (data.candidate) {
+      try {
+        await pc.addIceCandidate(data.candidate);
+      } catch (e) {
+        // After an ignored offer, stray ICE candidates may fail — debug only.
+        __ar.log.debug(`addIceCandidate peer=${from}`, e?.name || e);
+      }
+    }
+  } catch (e) {
+    // Negotiation race / state mismatch. Downgrade to warn (no impact on errors ring).
+    __ar.log.warn(`handleSignal peer=${from}`, e?.name || e);
   }
-  const rms = Math.sqrt(sum / mixAnalyserBuf.length);
-  const fill = $('mix-vu-fill');
-  if (fill) fill.style.width = Math.min(100, rms * 280) + '%';
 }
 
-//  fix utente: beep locale per verificare il device audio del browser.
-// Suono 880Hz sine wave 200ms, indipendente dalla pipeline WebRTC.
+// ============================================================================
+//  Test beep locale (verifica device audio del browser, 880Hz sine 200ms).
+// ============================================================================
 function playTestBeep() {
   try {
     const ctx = new AudioContext();
@@ -701,78 +721,11 @@ function showAudioGate() {
   $('audio-gate-btn')?.addEventListener('click', (ev) => { ev.stopPropagation(); release(); });
   gate.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); release(); } });
 }
-function hideAudioGate() { const gate = $('audio-gate'); if (gate) gate.classList.add('hidden'); }
+function hideAudioGate() {
+  const gate = $('audio-gate');
+  if (gate) gate.classList.add('hidden');
+}
 
-function createServerPc() {
-  const pc = new RTCPeerConnection(RTC_CONFIG);
-  pc.addEventListener('track', e => {
-    const mid = e.transceiver && e.transceiver.mid;
-    const pid = midToPeer.get(mid);
-    if (!pid) return;
-    const stream = e.streams[0] || new MediaStream([e.track]);
-    if (pid === '__mix__') attachMixAudio(stream);
-    else attachRemoteAudio(pid, stream);
-  });
-  pc.addEventListener('connectionstatechange', () => {
-    const st = pc.connectionState;
-    __ar.log.debug('[sfu] conn=' + st);
-    if (st === 'failed') {
-      //  il server e' offerer in SFU. Segnaliamo via WS; se entro 8s
-      // non riceviamo nuova offer, distruggiamo serverPc e attendiamo. Il
-      // supporto server-side completo per ICE restart e' sub- (Python).
-      __ar.log.warn('[sfu] connessione PC fallita, chiedo ICE restart al server');
-      try {
-        if (ws && ws.readyState === 1) {
-          ws.send(JSON.stringify({ type: 'ice-restart-request' }));
-        }
-      } catch {}
-      setTimeout(() => {
-        if (serverPc === pc && pc.connectionState === 'failed') {
-          __ar.log.warn('[sfu] nessuna risposta a ice-restart-request, riavvio sessione');
-          try { pc.close(); } catch {}
-          serverPc = null;
-          micAttached = false;
-          midToPeer.clear();
-          // forziamo il path di reconnect WS che si tira dietro un nuovo offer
-          if (ws && ws.readyState === 1) { try { ws.close(); } catch {} }
-        }
-      }, 8000);
-    }
-  });
-  pc.addEventListener('iceconnectionstatechange', () => __ar.log.debug('[sfu] ice=' + pc.iceConnectionState));
-  return pc;
-}
-async function handleServerOffer(msg) {
-  if (!serverPc) serverPc = createServerPc();
-  const pc = serverPc;
-  for (const tk of (msg.tracks || [])) {
-    midToPeer.set(tk.mid, tk.peerId);
-    if (tk.peerId !== '__mix__') ensureNode(tk.peerId, tk.name);
-  }
-  await pc.setRemoteDescription(msg.sdp);
-  // aggancia il microfono al transceiver indicato dal server
-  if (msg.micMid && !micAttached) {
-    const t = pc.getTransceivers().find(tr => tr.mid === msg.micMid);
-    if (t) {
-      try { t.direction = 'sendonly'; } catch {}
-      await t.sender.replaceTrack(localStream.getAudioTracks()[0]);
-      maximizeBitrate(pc);
-      micAttached = true;
-    }
-  }
-  const ans = await pc.createAnswer();
-  await pc.setLocalDescription(tuneOpus(ans));
-  await waitIce(pc);
-  ws.send(JSON.stringify({ type: 'answer', sdp: { sdp: pc.localDescription.sdp, type: pc.localDescription.type } }));
-}
-function waitIce(pc) {
-  if (pc.iceGatheringState === 'complete') return Promise.resolve();
-  return new Promise(res => {
-    const check = () => { if (pc.iceGatheringState === 'complete') { pc.removeEventListener('icegatheringstatechange', check); res(); } };
-    pc.addEventListener('icegatheringstatechange', check);
-    setTimeout(res, 2500);
-  });
-}
 function tuneOpus(desc) {
   let sdp = desc.sdp;
   const m = sdp.match(/a=rtpmap:(\d+) opus\/48000\/2/);
@@ -786,11 +739,19 @@ function tuneOpus(desc) {
   return { type: desc.type, sdp };
 }
 async function maximizeBitrate(pc) {
+  // Defensive: sender.getParameters() may return { encodings: [] } (empty array)
+  // on some negotiation paths, in which case p.encodings[0] is undefined and
+  // a naive assignment throws TypeError. Always ensure at least one encoding.
   for (const sender of pc.getSenders()) {
     if (!sender.track || sender.track.kind !== 'audio') continue;
-    const p = sender.getParameters(); if (!p.encodings) p.encodings = [{}];
-    p.encodings[0].maxBitrate = 510000;
-    try { await sender.setParameters(p); } catch {}
+    try {
+      const p = sender.getParameters();
+      if (!p.encodings || p.encodings.length === 0) p.encodings = [{}];
+      p.encodings[0].maxBitrate = 510000;
+      await sender.setParameters(p);
+    } catch (e) {
+      __ar.log.debug(`maximizeBitrate sender skip`, e?.name || e);
+    }
   }
 }
 function attachRemoteAudio(id, stream) {
@@ -812,12 +773,16 @@ function attachRemoteAudio(id, stream) {
   setupAnalyser(peer, stream);
 }
 function removePeer(id) {
-  const peer = peers.get(id); if (!peer) return;
-  if (peer.pc) { try { peer.pc.close(); } catch {} }
+  const peer = peers.get(id);
+  if (!peer) return;
+  if (peer.pc) {
+    try {
+      peer.pc.close();
+    } catch {}
+  }
   if (peer.audioEl) peer.audioEl.remove();
-  if (peer.videoEl) peer.videoEl.parentElement?.remove(); // tile container ()
+  if (peer.videoEl) peer.videoEl.parentElement?.remove();
   if (peer.ctx) peer.ctx.close().catch(() => {});
-  for (const [mid, pid] of midToPeer) if (pid === id) midToPeer.delete(mid);
   peers.delete(id);
   refreshVideoGridVisibility();
 }
@@ -826,8 +791,10 @@ function removePeer(id) {
 // L'audio dello screen share remoto va al normale audio el del peer (NON sul
 // video element, che resta muted per evitare doppia riproduzione).
 function attachRemoteVideo(id, stream) {
-  const peer = peers.get(id); if (!peer) return;
-  const grid = $('video-grid'); if (!grid) return;
+  const peer = peers.get(id);
+  if (!peer) return;
+  const grid = $('video-grid');
+  if (!grid) return;
   let tile = peer.videoTile;
   if (!tile) {
     tile = document.createElement('div');
@@ -836,7 +803,11 @@ function attachRemoteVideo(id, stream) {
     const video = document.createElement('video');
     video.autoplay = true;
     video.playsInline = true;
-    video.muted = true;
+    // NOT muted: if this stream carries screen-share audio, the video element
+    // is responsible for playing it (the mic audio uses a separate <audio> el).
+    // The output sink follows the user's selected device when supported.
+    video.muted = false;
+    if (outputSinkId && video.setSinkId) video.setSinkId(outputSinkId).catch(() => {});
     const label = document.createElement('div');
     label.className = 'video-label';
     label.textContent = peer.name;
@@ -847,8 +818,28 @@ function attachRemoteVideo(id, stream) {
     peer.videoEl = video;
   }
   peer.videoEl.srcObject = stream;
-  peer.videoEl.play().catch((e) => __ar.log.warn('[video] play()', e.name));
+  // Respect global deafen.
+  peer.videoEl.volume = deafened ? 0 : 1;
+  tryPlayVideo(peer.videoEl, `[video peer=${id}]`);
   refreshVideoGridVisibility();
+}
+
+// play()-with-audio-gate-fallback for remote <video> elements (same logic as audio).
+function tryPlayVideo(el, tag = '') {
+  el.play()
+    .then(() => {
+      pendingAudio.delete(el);
+      if (pendingAudio.size === 0) hideAudioGate();
+    })
+    .catch((err) => {
+      if (err && err.name === 'NotAllowedError') {
+        pendingAudio.add(el);
+        showAudioGate();
+        __ar.log.warn(`${tag} play() blocked (autoplay policy) — gate shown`);
+      } else {
+        __ar.log.warn(`${tag} play() error`, err?.name, err?.message);
+      }
+    });
 }
 
 function refreshVideoGridVisibility() {
@@ -872,7 +863,7 @@ function ensureSelfVideoTile() {
   video.srcObject = localStream;
   const label = document.createElement('div');
   label.className = 'video-label';
-  label.textContent = myName + ' (tu)';
+  label.textContent = myName + ' (you)';
   tile.appendChild(video);
   tile.appendChild(label);
   grid.appendChild(tile);
@@ -887,31 +878,32 @@ function setupAnalyser(target, stream) {
   if (target.ctx) target.ctx.close().catch(() => {});
   const ctx = new AudioContext();
   const src = ctx.createMediaStreamSource(stream);
-  const an = ctx.createAnalyser(); an.fftSize = 512;
-  an.smoothingTimeConstant = 0.7; //  smussa la FFT viz
+  const an = ctx.createAnalyser();
+  an.fftSize = 256; // metà dell'originale: in DOM-mode non serve risoluzione FFT, solo RMS
+  an.smoothingTimeConstant = 0.7;
   src.connect(an);
-  target.ctx = ctx; target.analyser = an;
+  target.ctx = ctx;
+  target.analyser = an;
   target._buf = new Uint8Array(an.frequencyBinCount);
-  target._freq = new Uint8Array(an.frequencyBinCount);
-  //  3 satelliti orbitanti con fasi sfalsate, velocita' base
-  if (!target._orbitPhases) target._orbitPhases = [0, 2.094, 4.188];
 }
-function setupSelfAnalyser() { setupAnalyser(self, localStream); }
+function setupSelfAnalyser() {
+  setupAnalyser(self, localStream);
+}
 
 function sampleRms(node) {
   if (!node.analyser) return 0;
   node.analyser.getByteTimeDomainData(node._buf);
-  //  FFT per visualization tangenziale
-  if (node._freq) node.analyser.getByteFrequencyData(node._freq);
-  let sum = 0; const b = node._buf;
-  for (let i = 0; i < b.length; i++) { const v = (b[i] - 128) / 128; sum += v * v; }
+  let sum = 0;
+  const b = node._buf;
+  for (let i = 0; i < b.length; i++) {
+    const v = (b[i] - 128) / 128;
+    sum += v * v;
+  }
   const rms = Math.sqrt(sum / b.length);
   node.rms = rms;
-  node.env.copyWithin(0, 1); node.env[ENV_LEN - 1] = rms; // shift + push
-  const nowSpeaking = rms > SPEAK_TH;
-  //  detect transizione idle→speak per emit shockwave
-  if (nowSpeaking && !node.speaking) node._shockT = performance.now();
-  node.speaking = nowSpeaking;
+  node.env.copyWithin(0, 1);
+  node.env[ENV_LEN - 1] = rms;
+  node.speaking = rms > SPEAK_TH;
   return rms;
 }
 
@@ -920,8 +912,9 @@ function sampleRms(node) {
 //  Layout Discord/Zoom-like: tile per ogni partecipante, glow verde quando
 //  parla, hover = popover volume/silenzia (riusa openPeerPopover/Self esistenti).
 // ============================================================================
-let lastT = 0;
 let _lastGridSig = '';
+const _gridElById = new Map(); // pid -> .participant element (cache per frame-fast lookup)
+let pollStatsTimer = null;
 
 function renderParticipantsGrid() {
   const grid = $('participants-grid');
@@ -941,391 +934,68 @@ function renderParticipantsGrid() {
         const isSelf = n === self;
         const muted = isSelf && !micEnabled;
         const speaking = n.speaking && !muted;
-        const name = isSelf ? myName + ' (tu)' : n.name || '?';
+        const name = isSelf ? myName + ' (you)' : n.name || '?';
         const init = initials(name);
         const cls = ['participant'];
         if (isSelf) cls.push('self');
         if (speaking) cls.push('speaking');
         if (muted) cls.push('muted');
         const sid = isSelf ? 'self' : n.id;
-        return `<div class="${cls.join(' ')}" data-pid="${escapeHtml(String(sid))}">
+        return `<div class="${cls.join(' ')}" role="listitem" data-pid="${escapeHtml(String(sid))}" tabindex="0" aria-label="${escapeHtml(name)}${muted ? ' (mic muted)' : speaking ? ' (speaking)' : ''}">
           <div class="participant-avatar"><span>${escapeHtml(init)}</span></div>
           <div class="participant-name">${escapeHtml(name)}</div>
           ${muted ? '<div class="participant-badge">🔇</div>' : speaking ? '<div class="participant-badge speak-badge">🎙</div>' : ''}
         </div>`;
       })
       .join('');
+    // ricostruisci cache id→element (fatto una volta per re-render, non per frame)
+    _gridElById.clear();
+    for (const el of grid.children) _gridElById.set(el.dataset.pid, el);
   }
-  // Aggiorna SOLO la "intensità" speaking via CSS var (no re-render DOM)
+  // Aggiorna SOLO la "intensità" speaking via CSS var (no re-render DOM).
+  // Lookup via Map invece di querySelector → O(1) costante per peer.
   for (const n of all) {
-    const isSelf = n === self;
-    const sid = isSelf ? 'self' : n.id;
-    const el = grid.querySelector(`[data-pid="${sid}"]`);
-    if (el) el.style.setProperty('--rms', String(Math.min(1, (n.rms || 0) * 3)));
-  }
-}
-
-function resizeCanvas() {
-  /*  no-op, niente piu' canvas */
-}
-
-function _unusedInitStars_pivot16() {
-  return; }
-function _legacyInitStars_pivot16() {
-  const n = Math.round((W * H) / 6000);  // densita' ~ area
-  stars = [];
-  for (let i = 0; i < n; i++) {
-    stars.push({
-      x: Math.random() * W,
-      y: Math.random() * H,
-      z: 0.25 + Math.random() * 0.75,
-      tw: Math.random() * 6.28,
-    });
-  }
-}
-/*  resize handler non più necessario senza canvas */
-
-function nodeList() { return [self, ...peers.values()]; }
-
-function layout(t) {
-  const cx = W / 2, cy = H / 2;
-  const R = Math.min(W, H) * 0.31;
-  const others = [...peers.values()];
-  self.x = cx + Math.sin(t * 0.0006 + self_fx) * 6;
-  self.y = cy + Math.cos(t * 0.0005 + self_fy) * 6;
-  others.forEach((p, i) => {
-    const ang = (i / Math.max(1, others.length)) * Math.PI * 2 - Math.PI / 2;
-    p.x = cx + Math.cos(ang) * R + Math.sin(t * 0.0007 + p.fx) * 10;
-    p.y = cy + Math.sin(ang) * R + Math.cos(t * 0.0006 + p.fy) * 10;
-  });
-}
-const self_fx = Math.random() * 6.28, self_fy = Math.random() * 6.28;
-
-function drawStars(t) {
-  // parallax: stelle "lontane" (z piccola) si muovono pochissimo, vicine di piu'
-  ctx2d.save();
-  for (const s of stars) {
-    // drift orizzontale lento proporzionale a z (depth)
-    const dx = ((s.x + t * 0.012 * s.z) % (W + 20)) - 10;
-    const dy = s.y + Math.sin(t * 0.0006 + s.tw) * 0.3;
-    // twinkle
-    const tw = 0.5 + 0.5 * Math.sin(t * 0.002 + s.tw * 3);
-    const a = (0.25 + 0.75 * s.z) * (0.45 + 0.55 * tw);
-    const r = 0.4 + 1.2 * s.z;
-    ctx2d.beginPath(); ctx2d.arc(dx, dy, r, 0, 7);
-    ctx2d.fillStyle = `rgba(${200 + Math.round(55 * s.z)},${210 + Math.round(40 * s.z)},255,${a})`;
-    ctx2d.fill();
-    // alone leggero sulle stelle piu' vicine
-    if (s.z > 0.85 && tw > 0.7) {
-      ctx2d.beginPath(); ctx2d.arc(dx, dy, r * 4, 0, 7);
-      ctx2d.fillStyle = `rgba(180,200,255,${0.04 * tw})`;
-      ctx2d.fill();
+    const sid = n === self ? 'self' : n.id;
+    const el = _gridElById.get(sid);
+    if (el) {
+      const v = Math.min(1, (n.rms || 0) * 3);
+      // skip set se delta < 0.02 (sotto la soglia visiva): evita reflow stylesheet
+      const prev = el._lastRms || 0;
+      if (Math.abs(v - prev) >= 0.02) {
+        el.style.setProperty('--rms', String(v));
+        el._lastRms = v;
+      }
     }
   }
-  ctx2d.restore();
 }
 
-function drawRadarBg(t) {
-  const cx = W / 2, cy = H / 2, maxR = Math.min(W, H) * 0.46;
-
-  // 1) Aura centrale profonda: gradiente radiale che "scava" la profondita'
-  const deep = ctx2d.createRadialGradient(cx, cy, 0, cx, cy, maxR * 1.3);
-  deep.addColorStop(0,    'rgba(40, 80, 160, 0.18)');
-  deep.addColorStop(0.35, 'rgba(20, 30, 80,  0.10)');
-  deep.addColorStop(1,    'rgba(0,  0,  0,   0)');
-  ctx2d.fillStyle = deep;
-  ctx2d.fillRect(0, 0, W, H);
-
-  // 2) Anelli concentrici con dissolvenza dal centro (effetto orizzonte)
-  ctx2d.save();
-  for (let i = 1; i <= 6; i++) {
-    const r = (maxR / 6) * i;
-    const a = 0.12 * (1 - i / 7);
-    ctx2d.strokeStyle = `rgba(180, 210, 255, ${a})`;
-    ctx2d.lineWidth = 1;
-    ctx2d.beginPath(); ctx2d.arc(cx, cy, r, 0, 7); ctx2d.stroke();
-  }
-  ctx2d.restore();
-
-  // 3) Crosshair sottilissima
-  ctx2d.save();
-  ctx2d.strokeStyle = 'rgba(180,210,255,0.06)'; ctx2d.lineWidth = 1;
-  ctx2d.beginPath(); ctx2d.moveTo(cx - maxR, cy); ctx2d.lineTo(cx + maxR, cy);
-  ctx2d.moveTo(cx, cy - maxR); ctx2d.lineTo(cx, cy + maxR); ctx2d.stroke();
-  ctx2d.restore();
-
-  // 4) Scan beam volumetrico (conic gradient: bagliore concentrato + scia)
-  const ang = (t * 0.0008) % (Math.PI * 2);
-  if (ctx2d.createConicGradient) {
-    const g = ctx2d.createConicGradient(ang - Math.PI / 2, cx, cy);
-    g.addColorStop(0,    'rgba(120, 180, 255, 0.00)');
-    g.addColorStop(0.02, 'rgba(120, 180, 255, 0.32)');
-    g.addColorStop(0.08, 'rgba(106, 163, 255, 0.08)');
-    g.addColorStop(0.20, 'rgba(106, 163, 255, 0.00)');
-    g.addColorStop(1,    'rgba(0,   0,   0,   0)');
-    ctx2d.fillStyle = g;
-    ctx2d.beginPath(); ctx2d.arc(cx, cy, maxR, 0, 7); ctx2d.fill();
-  }
-
-  // 5) Punto focale brillante al centro (origine del radar)
-  const core = ctx2d.createRadialGradient(cx, cy, 0, cx, cy, 30);
-  core.addColorStop(0, 'rgba(180,220,255,0.35)');
-  core.addColorStop(1, 'rgba(180,220,255,0)');
-  ctx2d.fillStyle = core;
-  ctx2d.beginPath(); ctx2d.arc(cx, cy, 30, 0, 7); ctx2d.fill();
-}
-
-// ----- Particelle audio-reattive che emanano dai nodi che parlano -----
-function spawnParticles(node, intensity) {
-  // ~0..3 particelle per frame in base all'intensita' (RMS)
-  const n = Math.min(3, Math.floor(intensity * 14));
-  for (let i = 0; i < n; i++) {
-    const ang = Math.random() * Math.PI * 2;
-    const sp = 0.4 + Math.random() * 0.9 + intensity * 1.8;
-    particles.push({
-      x: node.x + Math.cos(ang) * 6,
-      y: node.y + Math.sin(ang) * 6,
-      vx: Math.cos(ang) * sp,
-      vy: Math.sin(ang) * sp,
-      life: 0,
-      max: 60 + Math.random() * 40,
-      hue: 150 + Math.random() * 50,        // verde-acqua
-    });
-  }
-  if (particles.length > 600) particles.splice(0, particles.length - 600);
-}
-
-function updateAndDrawParticles(dt) {
-  ctx2d.save();
-  ctx2d.globalCompositeOperation = 'lighter';
-  for (let i = particles.length - 1; i >= 0; i--) {
-    const p = particles[i];
-    p.life += dt;
-    if (p.life >= p.max) { particles.splice(i, 1); continue; }
-    p.x += p.vx; p.y += p.vy;
-    p.vx *= 0.985; p.vy *= 0.985;
-    const a = (1 - p.life / p.max);
-    ctx2d.fillStyle = `hsla(${p.hue}, 90%, 70%, ${a * 0.55})`;
-    ctx2d.beginPath(); ctx2d.arc(p.x, p.y, 1.6 * a + 0.5, 0, 7); ctx2d.fill();
-  }
-  ctx2d.restore();
-}
-
-//  HALCYON: nodo spaziale a strati. Z-order:
-//   1) shockwave (onda d'urto su transizione idle->speak, dietro tutto)
-//   2) aura radiale (alone gravitazionale)
-//   3) satelliti orbitanti dietro
-//   4) corpo: gradient + scanline olografica + iridescent border
-//   5) satelliti orbitanti davanti
-//   6) FFT visualization tangenziale (32 bin)
-//   7) highlight specular + iniziali + nome
-function drawNode(node, t, isSelf) {
-  const muted = isSelf && !micEnabled;
-  const base = isSelf ? 38 : 32;
-  const r = muted ? base * 0.82 : base;
-  const speak = node.speaking && !muted;
-  const cx = node.x, cy = node.y;
-  const wallNow = performance.now();
-
-  // === Idle pulse (anche se non parla, mini-respiro 4s) =====================
-  const idleBreath = 1 + 0.04 * Math.sin(t * 0.0014 + (node.fx || 0));
-  const rEff = r * idleBreath;
-
-  // === 1. Shockwave su transizione idle->speak =============================
-  if (node._shockT && !muted) {
-    const age = wallNow - node._shockT;
-    if (age >= 0 && age < 700) {
-      const k = age / 700;
-      const sr = rEff + k * (90 + (node.rms || 0) * 120);
-      ctx2d.save();
-      ctx2d.lineWidth = 2.5 * (1 - k);
-      ctx2d.strokeStyle = `rgba(120,255,200,${(1 - k) * 0.7})`;
-      ctx2d.beginPath(); ctx2d.arc(cx, cy, sr, 0, 7); ctx2d.stroke();
-      ctx2d.restore();
-    } else if (age >= 700) {
-      node._shockT = null;
-    }
-  }
-
-  // === anelli waveform pulsanti (speak only) ===============================
-  if (speak) {
-    for (let k = 0; k < 3; k++) {
-      const phase = ((t * 0.0016 + k / 3) % 1);
-      const rr = rEff + 6 + phase * (24 + node.rms * 90);
-      ctx2d.beginPath(); ctx2d.arc(cx, cy, rr, 0, 7);
-      ctx2d.strokeStyle = `rgba(54,211,153,${(1 - phase) * 0.5})`;
-      ctx2d.lineWidth = 2; ctx2d.stroke();
-    }
-  } else if (muted) {
-    ctx2d.beginPath(); ctx2d.arc(cx, cy, rEff + 10, 0, 7);
-    ctx2d.strokeStyle = 'rgba(255,255,255,0.08)'; ctx2d.setLineDash([4, 6]); ctx2d.lineWidth = 1.5;
-    ctx2d.stroke(); ctx2d.setLineDash([]);
-  }
-
-  // === 2. Aura radiale gravitazionale ======================================
-  const auraR = rEff * 3.0;
-  const aura = ctx2d.createRadialGradient(cx, cy, rEff * 0.6, cx, cy, auraR);
-  if (speak) { aura.addColorStop(0, 'rgba(54,211,153,0.38)'); aura.addColorStop(1, 'rgba(54,211,153,0)'); }
-  else if (muted) { aura.addColorStop(0, 'rgba(120,130,160,0.10)'); aura.addColorStop(1, 'rgba(120,130,160,0)'); }
-  else { aura.addColorStop(0, 'rgba(120,160,240,0.20)'); aura.addColorStop(1, 'rgba(120,160,240,0)'); }
-  ctx2d.fillStyle = aura;
-  ctx2d.beginPath(); ctx2d.arc(cx, cy, auraR, 0, 7); ctx2d.fill();
-
-  // === 3. Satelliti orbitanti dietro =======================================
-  // 3 piccole sfere che orbitano. Quando parla, le orbite si espandono e
-  // accelerano leggermente; idle hanno raggio piu' contenuto.
-  const orbitR = rEff * (speak ? 1.55 : 1.35);
-  const orbitSpeed = speak ? 0.0024 : 0.0011;
-  const phases = node._orbitPhases || [0, 2.094, 4.188];
-  ctx2d.save();
-  ctx2d.globalCompositeOperation = 'lighter';
-  for (let i = 0; i < phases.length; i++) {
-    const ang = phases[i] + t * orbitSpeed * (i % 2 === 0 ? 1 : -0.7);
-    const ox = cx + Math.cos(ang) * orbitR;
-    const oy = cy + Math.sin(ang) * orbitR * 0.55; // ellittica per profondita'
-    const behind = Math.sin(ang) < 0; // dietro se la y normalizzata e' negativa
-    if (!behind) continue;
-    const sr = 2 + (node.rms || 0) * 6;
-    const hue = speak ? 150 + i * 18 : 200 + i * 22;
-    ctx2d.fillStyle = `hsla(${hue}, 90%, 70%, 0.7)`;
-    ctx2d.beginPath(); ctx2d.arc(ox, oy, sr, 0, 7); ctx2d.fill();
-  }
-  ctx2d.restore();
-
-  // === 4a. Corpo con gradient ==============================================
-  const grad = ctx2d.createLinearGradient(cx - rEff, cy - rEff, cx + rEff, cy + rEff);
-  if (muted) { grad.addColorStop(0, '#3a3f52'); grad.addColorStop(1, '#272b3a'); }
-  else if (speak) { grad.addColorStop(0, '#43e3ad'); grad.addColorStop(1, '#2bb6cf'); }
-  else { grad.addColorStop(0, 'rgba(106,163,255,0.92)'); grad.addColorStop(1, 'rgba(176,108,255,0.92)'); }
-  ctx2d.save();
-  ctx2d.shadowColor = speak ? 'rgba(54,211,153,0.95)' : 'rgba(106,163,255,0.5)';
-  ctx2d.shadowBlur = speak ? 32 : 14;
-  ctx2d.beginPath(); ctx2d.arc(cx, cy, rEff, 0, 7); ctx2d.fillStyle = grad; ctx2d.fill();
-  ctx2d.restore();
-
-  // === 4b. Scanline olografica interna (cyberpunk vibe) ====================
-  // Clip al cerchio e disegna una linea orizzontale sottile che si muove
-  // verticalmente. Si attenua quando muto.
-  if (!muted) {
-    ctx2d.save();
-    ctx2d.beginPath(); ctx2d.arc(cx, cy, rEff, 0, 7); ctx2d.clip();
-    const scanY = cy - rEff + ((t * 0.06 + (node.fx || 0) * 60) % (rEff * 2));
-    const grd = ctx2d.createLinearGradient(0, scanY - 1, 0, scanY + 2);
-    grd.addColorStop(0, 'rgba(255,255,255,0)');
-    grd.addColorStop(0.5, speak ? 'rgba(220,255,235,0.65)' : 'rgba(220,235,255,0.55)');
-    grd.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx2d.fillStyle = grd;
-    ctx2d.fillRect(cx - rEff, scanY - 1, rEff * 2, 3);
-    ctx2d.restore();
-  }
-
-  // === 4c. Bordo iridescente animato (HSL drift) ===========================
-  if (!muted) {
-    const hueShift = (t * 0.06 + (node.fx || 0) * 60) % 360;
-    ctx2d.save();
-    ctx2d.lineWidth = 1.5;
-    ctx2d.strokeStyle = speak
-      ? `hsla(${150 + ((hueShift) % 40)}, 90%, 70%, 0.85)`
-      : `hsla(${200 + ((hueShift) % 80)}, 80%, 72%, 0.6)`;
-    ctx2d.beginPath(); ctx2d.arc(cx, cy, rEff + 0.5, 0, 7); ctx2d.stroke();
-    ctx2d.restore();
-  }
-
-  // === 5. Satelliti orbitanti davanti ======================================
-  ctx2d.save();
-  ctx2d.globalCompositeOperation = 'lighter';
-  for (let i = 0; i < phases.length; i++) {
-    const ang = phases[i] + t * orbitSpeed * (i % 2 === 0 ? 1 : -0.7);
-    const ox = cx + Math.cos(ang) * orbitR;
-    const oy = cy + Math.sin(ang) * orbitR * 0.55;
-    const front = Math.sin(ang) >= 0;
-    if (!front) continue;
-    const sr = 2 + (node.rms || 0) * 6;
-    const hue = speak ? 150 + i * 18 : 200 + i * 22;
-    ctx2d.shadowColor = `hsla(${hue}, 90%, 70%, 0.9)`;
-    ctx2d.shadowBlur = 8;
-    ctx2d.fillStyle = `hsla(${hue}, 90%, 75%, 0.95)`;
-    ctx2d.beginPath(); ctx2d.arc(ox, oy, sr, 0, 7); ctx2d.fill();
-  }
-  ctx2d.restore();
-
-  // === 6. FFT visualization tangenziale (32 bin) ===========================
-  if (node._freq && !muted) {
-    const N = 32;
-    const innerR = rEff + 5;
-    const minBar = 1.2;
-    const maxBar = 22;
-    ctx2d.save();
-    for (let i = 0; i < N; i++) {
-      // Saltiamo le frequenze sub-bass (rumore costante) usando offset 2
-      const v = node._freq[i + 2] / 255;
-      if (v < 0.05) continue;
-      const ang = (i / N) * Math.PI * 2 - Math.PI / 2;
-      const lo = innerR;
-      const hi = innerR + minBar + v * maxBar;
-      const x1 = cx + Math.cos(ang) * lo;
-      const y1 = cy + Math.sin(ang) * lo;
-      const x2 = cx + Math.cos(ang) * hi;
-      const y2 = cy + Math.sin(ang) * hi;
-      const hue = speak ? 150 + i * 4 : 200 + i * 3;
-      ctx2d.strokeStyle = `hsla(${hue}, 95%, ${60 + v * 20}%, ${0.4 + v * 0.5})`;
-      ctx2d.lineWidth = 2;
-      ctx2d.beginPath(); ctx2d.moveTo(x1, y1); ctx2d.lineTo(x2, y2); ctx2d.stroke();
-    }
-    ctx2d.restore();
-  }
-
-  // === 7. Highlight specular + bordo self + testo ==========================
-  const sphere = ctx2d.createRadialGradient(cx - rEff * 0.35, cy - rEff * 0.45, 0, cx - rEff * 0.35, cy - rEff * 0.45, rEff * 0.9);
-  sphere.addColorStop(0, 'rgba(255,255,255,0.35)');
-  sphere.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx2d.fillStyle = sphere;
-  ctx2d.beginPath(); ctx2d.arc(cx, cy, rEff, 0, 7); ctx2d.fill();
-
-  if (isSelf) {
-    ctx2d.beginPath(); ctx2d.arc(cx, cy, rEff, 0, 7);
-    ctx2d.strokeStyle = 'rgba(255,255,255,0.55)'; ctx2d.lineWidth = 2; ctx2d.stroke();
-  }
-
-  // Iniziali con leggera ombra per profondita'
-  ctx2d.save();
-  ctx2d.fillStyle = muted ? '#9aa0b8' : (speak ? '#06291c' : '#fff');
-  ctx2d.font = `800 ${Math.round(rEff * 0.55)}px system-ui`;
-  ctx2d.textAlign = 'center'; ctx2d.textBaseline = 'middle';
-  ctx2d.shadowColor = 'rgba(0,0,0,0.45)';
-  ctx2d.shadowBlur = 2;
-  ctx2d.fillText(initials(isSelf ? myName : node.name), cx, cy);
-  ctx2d.restore();
-
-  // Nome con badge underline iridescente
-  ctx2d.fillStyle = 'rgba(255,255,255,0.9)';
-  ctx2d.font = '600 13px system-ui';
-  ctx2d.textAlign = 'center'; ctx2d.textBaseline = 'middle';
-  ctx2d.fillText((isSelf ? myName + ' (tu)' : node.name), cx, cy + rEff + 16);
-
-  if (muted) {
-    ctx2d.fillStyle = 'rgba(255,77,109,0.95)';
-    ctx2d.font = '600 11px system-ui';
-    ctx2d.fillText('🔇 muto', cx, cy + rEff + 32);
-  }
-
-  node._screenR = rEff; // per hit-test
-}
+// Handle del rAF loop. Quando il tab è hidden lo pausiamo (perf):
+//   - browser comunque rallenta rAF a ~1Hz, ma cosi' azzeriamo anche analyser,
+//     LED meter, querySelector, sampleRms loop -> niente jank al ritorno.
+let rafHandle = null;
 
 function tick(t) {
-  lastT = t;
   trackFps(t);
-  updateMixVu();
   sampleRms(self);
   for (const p of peers.values()) sampleRms(p);
-  // LED meter input
-  const pct = Math.min(100, self.rms * 280) * (micEnabled ? 1 : 0);
+  const pct = micEnabled ? Math.min(100, self.rms * 280) : 0;
   const meter = $('self-meter');
   if (meter) meter.style.width = pct + '%';
-  // Render DOM grid partecipanti
   renderParticipantsGrid();
-  requestAnimationFrame(tick);
+  rafHandle = requestAnimationFrame(tick);
 }
+
+// Pause/resume in base alla visibilità del documento.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (rafHandle) {
+      cancelAnimationFrame(rafHandle);
+      rafHandle = null;
+    }
+  } else if (!rafHandle && roomScreen && !roomScreen.classList.contains('hidden')) {
+    rafHandle = requestAnimationFrame(tick);
+  }
+});
 
 function initials(name) { return (name || '?').trim().slice(0, 2).toUpperCase() || '?'; }
 
@@ -1356,7 +1026,7 @@ function openPeerPopover(peer, x, y) {
   const po = $('popover');
   po.innerHTML = `<h4>${escapeHtml(peer.name)}</h4>
     <div class="row"><span>🔈</span><input type="range" min="0" max="200" value="${Math.round(peer.volume * 100)}"></div>
-    <button class="pbtn danger">Silenzia questo utente</button>`;
+    <button class="pbtn danger">Mute this user</button>`;
   const range = po.querySelector('input');
   range.addEventListener('input', () => {
     peer.volume = Number(range.value) / 100;
@@ -1369,9 +1039,9 @@ function openPeerPopover(peer, x, y) {
 }
 function openSelfPopover(x, y) {
   const po = $('popover');
-  po.innerHTML = `<h4>Il tuo nome</h4>
+  po.innerHTML = `<h4>Your name</h4>
     <input type="text" maxlength="32" value="${escapeHtml(myName)}">
-    <button class="pbtn">Salva</button>`;
+    <button class="pbtn">Save</button>`;
   const inp = po.querySelector('input');
   const save = () => {
     const n = inp.value.trim().slice(0, 32);
@@ -1396,17 +1066,26 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closePopover
 // ============================================================================
 $('mute-btn').addEventListener('click', () => {
   micEnabled = !micEnabled;
-  localStream.getAudioTracks().forEach(t => t.enabled = micEnabled);
-  $('mute-btn').classList.toggle('off', !micEnabled);
-  $('mute-btn').classList.toggle('live', micEnabled);
-  $('mute-btn').querySelector('.ico').textContent = micEnabled ? '🎙' : '🔇';
+  localStream.getAudioTracks().forEach((t) => (t.enabled = micEnabled));
+  const btn = $('mute-btn');
+  btn.classList.toggle('off', !micEnabled);
+  btn.classList.toggle('live', micEnabled);
+  btn.setAttribute('aria-pressed', String(micEnabled));
+  btn.querySelector('.ico').textContent = micEnabled ? '🎙' : '🔇';
+  announce(micEnabled ? 'Microphone live' : 'Microphone muted');
 });
 $('deafen-btn').addEventListener('click', () => {
   deafened = !deafened;
-  for (const p of peers.values()) if (p.audioEl) p.audioEl.volume = deafened ? 0 : p.volume;
-  if (mixAudioEl) mixAudioEl.volume = deafened ? 0 : 1;
-  $('deafen-btn').classList.toggle('off', deafened);
-  $('deafen-btn').querySelector('.ico').textContent = deafened ? '🔇' : '🔊';
+  for (const p of peers.values()) {
+    if (p.audioEl) p.audioEl.volume = deafened ? 0 : p.volume;
+    // Also mute the remote video element (which carries screen-share audio).
+    if (p.videoEl) p.videoEl.volume = deafened ? 0 : 1;
+  }
+  const btn = $('deafen-btn');
+  btn.classList.toggle('off', deafened);
+  btn.setAttribute('aria-pressed', String(deafened));
+  btn.querySelector('.ico').textContent = deafened ? '🔇' : '🔊';
+  announce(deafened ? 'Incoming audio silenced' : 'Incoming audio restored');
 });
 $('aec-toggle').addEventListener('click', async () => {
   aecOn = !aecOn; syncAecUI();
@@ -1422,7 +1101,6 @@ $('mic-room-select').addEventListener('change', async () => {
 $('out-select').addEventListener('change', () => {
   outputSinkId = $('out-select').value;
   for (const p of peers.values()) if (p.audioEl?.setSinkId) p.audioEl.setSinkId(outputSinkId).catch(() => {});
-  if (mixAudioEl?.setSinkId) mixAudioEl.setSinkId(outputSinkId).catch(() => {});
 });
 // ============================================================================
 //  VIDEO QUALITY () — 1080p60 + codec preference AV1 → H264 (NVENC se
@@ -1513,10 +1191,9 @@ async function startCamera() {
   const settings = track.getSettings?.() || {};
   __ar.log.info(`[camera] acquisita ${settings.width}x${settings.height}@${settings.frameRate}fps`);
   track.addEventListener('ended', () => stopCamera());
-  const targets =
-    mode === 'sfu' && serverPc
-      ? [{ pc: serverPc, peerId: '__sfu__' }]
-      : [...peers.values()].filter((p) => p.pc).map((p) => ({ pc: p.pc, peerId: p.id }));
+  const targets = [...peers.values()]
+    .filter((p) => p.pc)
+    .map((p) => ({ pc: p.pc, peerId: p.id }));
   for (const { pc, peerId } of targets) {
     try {
       const sender = pc.addTrack(track, cameraStream);
@@ -1559,7 +1236,7 @@ function ensureSelfCameraTile(stream) {
   video.srcObject = stream;
   const label = document.createElement('div');
   label.className = 'video-label';
-  label.textContent = myName + ' (tu)';
+  label.textContent = myName + ' (you)';
   tile.appendChild(video);
   tile.appendChild(label);
   grid.appendChild(tile);
@@ -1571,8 +1248,9 @@ function updateCameraUi(active) {
   const btn = $('camera-btn');
   if (!btn) return;
   btn.classList.toggle('active', active);
+  btn.setAttribute('aria-pressed', String(active));
   btn.querySelector('.ico').textContent = active ? '🛑' : '📹';
-  btn.title = active ? 'Spegni camera' : 'Attiva camera (mesh P2P)';
+  btn.title = active ? 'Turn camera off (C)' : 'Turn camera on (C)';
 }
 
 // ============================================================================
@@ -1583,10 +1261,10 @@ function updateAloneBadge() {
   const b = $('alone-badge');
   if (!b) return;
   // peers = altri utenti (escluso self). Se 0, sono solo nella stanza.
-  if (peers.size === 0 && mode) b.classList.remove('hidden');
-  else b.classList.add('hidden');
+  b.classList.toggle('hidden', peers.size !== 0);
 }
-setInterval(updateAloneBadge, 1000);
+// event-driven (peer-joined/peer-left chiamano updateAloneBadge direttamente):
+// niente più polling 1Hz inutile.
 
 // ============================================================================
 //  SCREEN SHARING () — mesh P2P only
@@ -1622,10 +1300,9 @@ async function startScreenShare() {
   videoTrack.addEventListener('ended', () => stopScreenShare());
   audioTrack?.addEventListener('ended', () => __ar.log.info('[screen] audio track ended'));
 
-  const targets =
-    mode === 'sfu' && serverPc
-      ? [{ pc: serverPc, peerId: '__sfu__' }]
-      : [...peers.values()].filter((p) => p.pc).map((p) => ({ pc: p.pc, peerId: p.id }));
+  const targets = [...peers.values()]
+    .filter((p) => p.pc)
+    .map((p) => ({ pc: p.pc, peerId: p.id }));
 
   for (const { pc, peerId } of targets) {
     try {
@@ -1677,7 +1354,7 @@ function ensureSelfScreenTile(stream) {
   const audioOn = stream.getAudioTracks().length > 0;
   const label = document.createElement('div');
   label.className = 'video-label';
-  label.textContent = audioOn ? '📺🔊 Schermo + audio condivisi' : '📺 Stai condividendo lo schermo';
+  label.textContent = audioOn ? '📺🔊 Sharing screen + audio' : '📺 Sharing your screen';
   tile.appendChild(video);
   tile.appendChild(label);
   grid.appendChild(tile);
@@ -1689,8 +1366,9 @@ function updateScreenShareUi(active) {
   const btn = $('screen-share-btn');
   if (!btn) return;
   btn.classList.toggle('active', active);
+  btn.setAttribute('aria-pressed', String(active));
   btn.querySelector('.ico').textContent = active ? '⏹' : '📺';
-  btn.title = active ? 'Ferma condivisione' : 'Condividi schermo (mesh P2P)';
+  btn.title = active ? 'Stop sharing (S)' : 'Share screen (S)';
 }
 
 $('leave-btn').addEventListener('click', () => {
@@ -1856,20 +1534,20 @@ function toggleShortcutsCheatsheet() {
   cheatsheetEl = document.createElement('div');
   cheatsheetEl.className = 'shortcuts-cheatsheet';
   cheatsheetEl.innerHTML = `
-    <h3>⌨ Shortcut tastiera</h3>
+    <h3>⌨ Keyboard shortcuts</h3>
     <table>
-      <tr><th>Tasto</th><th>Azione</th></tr>
-      <tr><td><kbd>M</kbd></td><td>Microfono on/off</td></tr>
+      <tr><th>Key</th><th>Action</th></tr>
+      <tr><td><kbd>M</kbd></td><td>Mic on/off</td></tr>
       <tr><td><kbd>Space</kbd> (hold)</td><td>Push-to-talk</td></tr>
-      <tr><td><kbd>D</kbd></td><td>Deafen (silenzia tutto)</td></tr>
+      <tr><td><kbd>D</kbd></td><td>Deafen (silence all incoming)</td></tr>
       <tr><td><kbd>C</kbd></td><td>Camera on/off</td></tr>
-      <tr><td><kbd>S</kbd></td><td>Schermo on/off</td></tr>
+      <tr><td><kbd>S</kbd></td><td>Screen-share on/off</td></tr>
       <tr><td><kbd>T</kbd></td><td>Test beep</td></tr>
       <tr><td><kbd>Ctrl+Shift+D</kbd></td><td>Stats debug panel</td></tr>
-      <tr><td><kbd>?</kbd></td><td>Questo riepilogo</td></tr>
-      <tr><td><kbd>Esc</kbd></td><td>Chiudi pannelli</td></tr>
+      <tr><td><kbd>?</kbd></td><td>This cheatsheet</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>Close panels</td></tr>
     </table>
-    <p class="cheat-foot">Le shortcut sono disattive nei campi di testo. Premi <kbd>?</kbd> o <kbd>Esc</kbd> per chiudere.</p>
+    <p class="cheat-foot">Shortcuts are disabled while typing in a text field. Press <kbd>?</kbd> or <kbd>Esc</kbd> to close.</p>
   `;
   document.body.appendChild(cheatsheetEl);
 }
@@ -1953,10 +1631,11 @@ function onChatMessage(m) {
   if (chatState.msgById.has(m.id)) return;
   chatState.messages.push(m);
   chatState.msgById.set(m.id, m);
-  renderChatList();
+  appendChatMsg(m); // append-only invece di full rebuild
   if (!chatState.open && m.fromId !== profile.userId) {
     chatState.unread++;
     updateChatBadge();
+    announce(`Nuovo messaggio in chat da ${m.fromName}`);
   }
 }
 
@@ -1965,14 +1644,14 @@ function onChatEdited({ msgId, text, editedAt }) {
   if (!m) return;
   m.text = text;
   m.editedAt = editedAt;
-  renderChatList();
+  updateChatMsg(m); // in-place
 }
 
 function onChatDeleted(msgId) {
   const m = chatState.msgById.get(msgId);
   if (!m) return;
   m.deleted = true;
-  renderChatList();
+  updateChatMsg(m); // in-place
 }
 
 function onChatTyping({ from, fromName, isTyping }) {
@@ -2003,36 +1682,79 @@ function renderQuickReactionsHtml() {
   return (
     '<div class="chat-react-picker">' +
     QUICK_EMOJIS.map(
-      (e) => `<button class="chat-quick-react" data-emoji="${e}" title="Reazione ${e}">${e}</button>`,
+      (e) =>
+        `<button class="chat-quick-react" data-emoji="${e}" title="React ${e}">${e}</button>`,
     ).join('') +
     '</div>'
   );
 }
 
+// Rendering chat incrementale: la versione precedente faceva `list.innerHTML = ...`
+// su OGNI nuovo messaggio / edit / delete / reaction. Per 100+ messaggi questo:
+//   1) rompe la selezione di testo dell'utente
+//   2) interrompe lo scroll se l'utente sta leggendo in alto
+//   3) costa O(N) DOM rebuild + reflow ogni volta
+// Ora: append-only per i nuovi, in-place update per edit/delete/react.
+function renderChatMsgEl(m) {
+  const mine = m.fromId === profile.userId ? ' mine' : '';
+  const el = document.createElement('div');
+  el.className = 'chat-msg' + mine;
+  el.dataset.id = m.id;
+  updateChatMsgInner(el, m);
+  return el;
+}
+
+function updateChatMsgInner(el, m) {
+  if (m.deleted) {
+    el.classList.add('deleted');
+    el.innerHTML = `<span class="chat-from">${escapeHtmlText(m.fromName)}</span><span class="chat-body deleted-body">[message removed]</span>`;
+    return;
+  }
+  el.classList.remove('deleted');
+  const edited = m.editedAt ? ' <span class="edit-tag">(edited)</span>' : '';
+  const html = renderChatMarkdown(m.text);
+  const time = new Date(m.ts).toLocaleTimeString('it-IT', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  const reactions = renderReactionsHtml(m.reactions, profile.userId);
+  el.innerHTML =
+    `<div class="chat-meta"><span class="chat-from">${escapeHtmlText(m.fromName)}</span> <span class="chat-time">${time}</span>${edited}</div>` +
+    `<div class="chat-body">${html}</div>` +
+    reactions +
+    renderQuickReactionsHtml();
+}
+
 function renderChatList() {
+  // Full rebuild: usato solo dal load iniziale di history.
   const list = $('chat-list');
   if (!list) return;
-  // Stampiamo dal piu' vecchio al piu' nuovo; con flex-direction:column-reverse
-  // sul container il browser autoscrollera' verso il basso (gli ultimi).
-  list.innerHTML = chatState.messages.map((m) => {
-    const mine = m.fromId === profile.userId ? ' mine' : '';
-    const edited = m.editedAt ? ' <span class="edit-tag">(modificato)</span>' : '';
-    if (m.deleted) {
-      return `<div class="chat-msg${mine} deleted" data-id="${m.id}"><span class="chat-from">${escapeHtmlText(m.fromName)}</span><span class="chat-body deleted-body">[messaggio rimosso]</span></div>`;
-    }
-    const html = renderChatMarkdown(m.text);
-    const time = new Date(m.ts).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
-    const reactions = renderReactionsHtml(m.reactions, profile.userId);
-    return `<div class="chat-msg${mine}" data-id="${m.id}"><div class="chat-meta"><span class="chat-from">${escapeHtmlText(m.fromName)}</span> <span class="chat-time">${time}</span>${edited}</div><div class="chat-body">${html}</div>${reactions}${renderQuickReactionsHtml()}</div>`;
-  }).join('');
+  list.replaceChildren(...chatState.messages.map(renderChatMsgEl));
   list.scrollTop = list.scrollHeight;
+}
+
+function appendChatMsg(m) {
+  const list = $('chat-list');
+  if (!list) return;
+  // Se l'utente è scrollato vicino al fondo (entro 80px) auto-scroll;
+  // altrimenti non interrompere la lettura.
+  const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+  list.appendChild(renderChatMsgEl(m));
+  if (nearBottom) list.scrollTop = list.scrollHeight;
+}
+
+function updateChatMsg(m) {
+  const list = $('chat-list');
+  const el = list?.querySelector(`.chat-msg[data-id="${CSS.escape(m.id)}"]`);
+  if (!el) return appendChatMsg(m);
+  updateChatMsgInner(el, m);
 }
 
 function onChatReactionUpdate({ msgId, reactions }) {
   const m = chatState.msgById.get(msgId);
   if (!m) return;
   m.reactions = reactions;
-  renderChatList();
+  updateChatMsg(m);
 }
 
 function sendReaction(msgId, emoji) {
@@ -2047,9 +1769,10 @@ function renderChatTyping() {
   for (const [k, v] of chatState.typingUsers) if (v.until < now) chatState.typingUsers.delete(k);
   const names = [...chatState.typingUsers.values()].map((v) => v.name);
   if (!names.length) { el.textContent = ''; return; }
-  el.textContent = names.length === 1
-    ? `${names[0]} sta scrivendo…`
-    : `${names.slice(0, -1).join(', ')} e ${names[names.length - 1]} stanno scrivendo…`;
+  el.textContent =
+    names.length === 1
+      ? `${names[0]} is typing…`
+      : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} are typing…`;
 }
 
 function updateChatBadge() {
@@ -2063,7 +1786,10 @@ function updateChatBadge() {
 
 function openChat() {
   chatState.open = true;
-  $('chat-drawer')?.classList.add('open');
+  const drawer = $('chat-drawer');
+  drawer?.classList.add('open');
+  drawer?.setAttribute('aria-hidden', 'false');
+  $('chat-toggle')?.setAttribute('aria-expanded', 'true');
   chatState.unread = 0;
   updateChatBadge();
   setTimeout(() => $('chat-input')?.focus(), 50);
@@ -2071,7 +1797,10 @@ function openChat() {
 
 function closeChat() {
   chatState.open = false;
-  $('chat-drawer')?.classList.remove('open');
+  const drawer = $('chat-drawer');
+  drawer?.classList.remove('open');
+  drawer?.setAttribute('aria-hidden', 'true');
+  $('chat-toggle')?.setAttribute('aria-expanded', 'false');
 }
 
 function bindChatUi() {
@@ -2127,8 +1856,11 @@ window.__ar.chat = () => ({
 //  STATS: latenza + topologia (P2P vs relay)
 // ============================================================================
 async function pollStats() {
-  const pcs = mode === 'sfu' ? (serverPc ? [serverPc] : []) : [...peers.values()].map(p => p.pc).filter(Boolean);
-  const rtts = []; let relay = false, any = false;
+  if (document.hidden) return; // perf: niente getStats() in background tab
+  const pcs = [...peers.values()].map((p) => p.pc).filter(Boolean);
+  const rtts = [];
+  let relay = false,
+    any = false;
   for (const pc of pcs) {
     try {
       const stats = await pc.getStats();
@@ -2180,14 +1912,9 @@ function trackFps(now) {
 }
 
 async function collectStatsAll() {
-  const pcs =
-    mode === 'sfu'
-      ? serverPc
-        ? [{ pid: '__sfu__', pc: serverPc, name: 'Studio' }]
-        : []
-      : [...peers.values()]
-          .filter((p) => p.pc)
-          .map((p) => ({ pid: p.id || '?', pc: p.pc, name: p.name }));
+  const pcs = [...peers.values()]
+    .filter((p) => p.pc)
+    .map((p) => ({ pid: p.id || '?', pc: p.pc, name: p.name }));
   const out = [];
   for (const { pid, pc, name } of pcs) {
     const entry = { pid, name, rtt: null, loss: null, jitter: null, kbpsDown: null, kbpsUp: null, codec: null };
@@ -2253,7 +1980,7 @@ async function renderStatsPanel() {
   }
   const $$ = (id) => document.getElementById(id);
   if ($$('stats-ws')) $$('stats-ws').textContent = wsState;
-  if ($$('stats-mode')) $$('stats-mode').textContent = mode;
+  if ($$('stats-mode')) $$('stats-mode').textContent = 'mesh';
   if ($$('stats-errors')) $$('stats-errors').textContent = String(__ar.state.errors.length);
   if ($$('stats-fps')) $$('stats-fps').textContent = String(statsState.fps);
 }
@@ -2268,9 +1995,8 @@ function setLat(ms) {
 }
 function setTopo(relay) {
   const el = $('topo-badge');
-  if (mode === 'sfu') { el.className = 'topo'; el.textContent = '🎛 Studio · DeepFilterNet'; return; }
   el.className = 'topo' + (relay ? ' relay' : '');
-  el.textContent = relay ? '↩ Relay (TURN)' : '⛓ P2P diretto';
+  el.textContent = relay ? '↩ Relay (TURN)' : '⛓ Direct P2P';
 }
 
 // ============================================================================

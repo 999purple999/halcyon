@@ -11,6 +11,9 @@ import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import zlib from 'node:zlib';
+import crypto from 'node:crypto';
+import { pipeline } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import selfsigned from 'selfsigned';
@@ -81,7 +84,7 @@ function loadOrCreateCert() {
     return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) };
   }
   log.info('Genero un certificato self-signed (solo la prima volta)...');
-  const attrs = [{ name: 'commonName', value: 'acoustic-radar-local' }];
+  const attrs = [{ name: 'commonName', value: 'halcyon-local' }];
   const pems = selfsigned.generate(attrs, {
     days: 3650,
     keySize: 2048,
@@ -95,7 +98,13 @@ function loadOrCreateCert() {
 }
 
 // ---------------------------------------------------------------------------
-//  Static file server minimale
+//  Static file server con cache ETag + compression negotiation (br/gzip).
+//   - Strong ETag basato su SHA-1 short del contenuto: lo calcoliamo lazy
+//     al primo hit e teniamo (etag, mtimeMs, compressed) in memoria.
+//   - Per HTML uso `no-cache, must-revalidate`: il browser fa sempre IF-NONE-MATCH
+//     ma riceve 304 se invariato → bandwidth quasi zero per il reload F5.
+//   - Per asset versionabili (.js/.css) idem: stesso comportamento; basta cambiare
+//     contenuto e l'ETag cambia.
 // ---------------------------------------------------------------------------
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -105,26 +114,96 @@ const MIME = {
   '.ico': 'image/x-icon',
   '.json': 'application/json',
 };
+const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.svg', '.json']);
+// Cache in-memory: filePath -> { etag, mtimeMs, raw, br, gz }
+const fileCache = new Map();
+
+function pickEncoding(req) {
+  const ae = String(req.headers['accept-encoding'] || '').toLowerCase();
+  if (ae.includes('br')) return 'br';
+  if (ae.includes('gzip')) return 'gzip';
+  return null;
+}
+
+function loadCachedFile(filePath, ext) {
+  const stat = fs.statSync(filePath);
+  const cached = fileCache.get(filePath);
+  if (cached && cached.mtimeMs === stat.mtimeMs) return cached;
+  const raw = fs.readFileSync(filePath);
+  const etag = '"' + crypto.createHash('sha1').update(raw).digest('hex').slice(0, 16) + '"';
+  const entry = { etag, mtimeMs: stat.mtimeMs, raw, br: null, gz: null };
+  if (COMPRESSIBLE.has(ext)) {
+    try {
+      entry.br = zlib.brotliCompressSync(raw, {
+        params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 },
+      });
+    } catch {}
+    try {
+      entry.gz = zlib.gzipSync(raw, { level: 6 });
+    } catch {}
+  }
+  fileCache.set(filePath, entry);
+  return entry;
+}
 
 function serveStatic(req, res) {
   let urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
   if (urlPath === '/') urlPath = '/index.html';
-  // Anti path-traversal
   const filePath = path.normalize(path.join(PUBLIC_DIR, urlPath));
   if (!filePath.startsWith(PUBLIC_DIR)) {
     res.writeHead(403);
     return res.end('Forbidden');
   }
-  fs.readFile(filePath, (err, data) => {
-    if (err) {
+  let entry;
+  try {
+    const ext = path.extname(filePath).toLowerCase();
+    entry = loadCachedFile(filePath, ext);
+    // === Conditional GET (304) ===
+    const inm = req.headers['if-none-match'];
+    if (inm && inm === entry.etag) {
+      res.writeHead(304, {
+        ETag: entry.etag,
+        'Cache-Control': 'no-cache, must-revalidate',
+      });
+      return res.end();
+    }
+    // === Compression negotiation ===
+    const enc = pickEncoding(req);
+    let body = entry.raw;
+    const headers = {
+      'Content-Type': MIME[ext] || 'application/octet-stream',
+      ETag: entry.etag,
+      'Cache-Control': 'no-cache, must-revalidate',
+      Vary: 'Accept-Encoding',
+      // Security headers a basso costo per LAN-only app
+      'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer',
+    };
+    if (enc === 'br' && entry.br) {
+      body = entry.br;
+      headers['Content-Encoding'] = 'br';
+    } else if (enc === 'gzip' && entry.gz) {
+      body = entry.gz;
+      headers['Content-Encoding'] = 'gzip';
+    }
+    headers['Content-Length'] = body.length;
+    res.writeHead(200, headers);
+    if (req.method === 'HEAD') return res.end();
+    res.end(body);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
       res.writeHead(404);
       return res.end('Not found');
     }
-    const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
-    res.end(data);
-  });
+    log.warn('static error', err.message);
+    res.writeHead(500);
+    res.end('Internal error');
+  }
 }
+
+// Avoid unused: pipeline è importato per allinearsi a node:stream best-practice,
+// in caso futuro di range/streaming.
+void pipeline;
 
 // ---------------------------------------------------------------------------
 //  Health/Readiness — intercettati PRIMA di serveStatic per non confonderli
@@ -415,13 +494,6 @@ wss.on('connection', (ws) => {
         send(ws, { type: 'pong', t: msg.t });
         break;
       }
-      //  ICE restart request per SFU. Il server P2P (Node) non e' SFU,
-      // quindi qui e' un no-op informativo. Sub- implementera' la
-      // controparte nel server Studio Python (dfn_server.py).
-      case 'ice-restart-request': {
-        log.debug(`peer=${id} ice-restart-request ignorato (P2P mesh, no SFU)`);
-        break;
-      }
       // ---------------------------------------------------------------------
       //  chat testuale per-stanza (persistente in SQLite messages).
       // ---------------------------------------------------------------------
@@ -597,28 +669,28 @@ function lanAddresses() {
 }
 
 httpsServer.listen(PORT, '0.0.0.0', () => {
-  // banner SEMPRE visibile (forzato INFO indipendentemente da LOG_LEVEL)
+  // Banner is ALWAYS visible (forced INFO regardless of LOG_LEVEL).
   log.banner('========================================================');
   log.banner('  HALCYON  ·  server live');
   log.banner('========================================================');
   log.banner(`  LOG_LEVEL=${LOG_LEVEL}`);
-  log.banner(`  Sul tuo PC:        https://localhost:${PORT}`);
+  log.banner(`  On this machine:   https://localhost:${PORT}`);
   for (const ip of lanAddresses()) {
-    log.banner(`  Per gli amici:     https://${ip}:${PORT}`);
+    log.banner(`  For your peers:    https://${ip}:${PORT}`);
   }
   log.banner('--------------------------------------------------------');
-  log.banner('  /healthz e /readyz disponibili per probe esterni.');
-  log.banner('  Nota: al primo accesso il browser mostra un avviso di');
-  log.banner("  sicurezza (certificato self-signed). E' normale.");
+  log.banner('  /healthz and /readyz are available for external probes.');
+  log.banner('  Note: on first access the browser will warn about the');
+  log.banner('  self-signed certificate. That is expected.');
   log.banner('========================================================');
 });
 
-// graceful shutdown -> /readyz tornera' 503 e i client lo capiranno
+// Graceful shutdown -> /readyz returns 503 so clients can detect the drain window.
 process.on('SIGTERM', () => {
-  log.info('SIGTERM ricevuto, chiudo');
+  log.info('SIGTERM received, shutting down');
   httpsServer.close(() => process.exit(0));
 });
 process.on('SIGINT', () => {
-  log.info('SIGINT ricevuto, chiudo');
+  log.info('SIGINT received, shutting down');
   httpsServer.close(() => process.exit(0));
 });
