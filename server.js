@@ -113,8 +113,9 @@ const MIME = {
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
   '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
 };
-const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.svg', '.json']);
+const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.svg', '.json', '.webmanifest']);
 // Cache in-memory: filePath -> { etag, mtimeMs, raw, br, gz }
 const fileCache = new Map();
 

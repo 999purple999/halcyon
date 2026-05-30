@@ -1543,6 +1543,37 @@ body.ptt-active::after {
   border-top: 1px solid var(--c-line-1);
   padding: 12px;
 }
+.chat-input-tools {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+.chat-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--c-line-2);
+  background: var(--c-bg-2);
+  color: var(--c-text-2);
+  font-family: inherit;
+  font-size: var(--t-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--m-fast) var(--ease),
+    border-color var(--m-fast) var(--ease),
+    color var(--m-fast) var(--ease);
+}
+.chat-tool-btn:hover {
+  background: var(--c-bg-3);
+  border-color: var(--c-accent);
+  color: var(--c-text-1);
+}
+.chat-tool-btn svg {
+  color: var(--c-accent);
+}
 .chat-input {
   width: 100%;
   resize: none;

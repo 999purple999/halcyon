@@ -1,0 +1,21 @@
+{
+  "name": "Halcyon",
+  "short_name": "Halcyon",
+  "description": "Self-hosted realtime mesh voice and video. Local-first, zero-cloud, LAN-only.",
+  "lang": "en",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#4fd1a1",
+  "background_color": "#0a0c10",
+  "categories": ["communication", "productivity"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

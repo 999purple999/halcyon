@@ -650,6 +650,16 @@ function ensurePeerMesh(id, name, initiator) {
   peer._isPolite = !initiator;
   peer._makingOffer = false;
   for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
+
+  // File-transfer DataChannel. Initiator creates the channel; receiver attaches
+  // to the inbound channel via ondatachannel. Both sides agree on label='file'.
+  if (initiator) {
+    const dc = pc.createDataChannel('file', { ordered: true });
+    setupFileChannel(peer, dc);
+  }
+  pc.addEventListener('datachannel', (e) => {
+    if (e.channel.label === 'file') setupFileChannel(peer, e.channel);
+  });
   pc.addEventListener('icecandidate', (e) => {
     if (e.candidate) signal(id, { candidate: e.candidate });
   });
@@ -2629,6 +2639,131 @@ function reportQuality(peerId, peerName, rttMs, lossPct) {
   }
 }
 
+// ============================================================================
+// FILE TRANSFER — RTCDataChannel chunked (16 KB chunks, JSON control msgs)
+//
+// Each peer connection carries a single 'file' DataChannel. The sender sends
+// a JSON header { t:'hdr', id, name, size, mime }, then a stream of binary
+// 16 KB chunks, then { t:'end', id }. The receiver assembles the chunks per
+// peer (single in-flight transfer per direction in v1) and triggers a
+// browser download as soon as the trailing 'end' arrives. Hard cap on file
+// size to keep the worst-case memory footprint bounded.
+// ============================================================================
+const FILE_CHUNK = 16 * 1024;
+const FILE_MAX_BYTES = 200 * 1024 * 1024; // 200 MB
+const _incomingFile = new Map(); // peerId -> { meta, chunks: ArrayBuffer[], received }
+
+function setupFileChannel(peer, dc) {
+  peer.fileDc = dc;
+  dc.binaryType = 'arraybuffer';
+  dc.addEventListener('message', (e) => handleFileMessage(peer, e.data));
+  dc.addEventListener('close', () => {
+    if (peer.fileDc === dc) peer.fileDc = null;
+  });
+}
+
+function handleFileMessage(peer, data) {
+  if (typeof data === 'string') {
+    let msg;
+    try {
+      msg = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (msg.t === 'hdr') {
+      if (typeof msg.size !== 'number' || msg.size > FILE_MAX_BYTES) {
+        __ar.log.warn('[file] rejecting oversize header', msg);
+        return;
+      }
+      _incomingFile.set(peer.id, {
+        meta: msg,
+        chunks: [],
+        received: 0,
+      });
+      showToast(`Incoming file from ${peer.name || peer.id}: ${msg.name} (${humanBytes(msg.size)})`, 3000);
+    } else if (msg.t === 'end') {
+      const f = _incomingFile.get(peer.id);
+      if (!f) return;
+      const blob = new Blob(f.chunks, { type: f.meta.mime || 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = f.meta.name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      _incomingFile.delete(peer.id);
+      showToast(`Received ${f.meta.name}`, 2500);
+      playSound('msg');
+    }
+    return;
+  }
+  // Binary chunk for the current in-flight file from this peer
+  const f = _incomingFile.get(peer.id);
+  if (!f) return;
+  if (f.received + data.byteLength > FILE_MAX_BYTES) {
+    __ar.log.warn('[file] overflow, dropping transfer');
+    _incomingFile.delete(peer.id);
+    return;
+  }
+  f.chunks.push(data);
+  f.received += data.byteLength;
+}
+
+async function sendFileToAllPeers(file) {
+  if (!file) return;
+  if (file.size > FILE_MAX_BYTES) {
+    showToast(`File too large (${humanBytes(file.size)}, max ${humanBytes(FILE_MAX_BYTES)})`, 3500);
+    return;
+  }
+  const fileId =
+    (crypto.randomUUID && crypto.randomUUID()) ||
+    'f-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const hdr = JSON.stringify({
+    t: 'hdr',
+    id: fileId,
+    name: file.name,
+    size: file.size,
+    mime: file.type || 'application/octet-stream',
+  });
+  const end = JSON.stringify({ t: 'end', id: fileId });
+  const buf = await file.arrayBuffer();
+  let sentToPeers = 0;
+  for (const peer of peers.values()) {
+    const dc = peer.fileDc;
+    if (!dc || dc.readyState !== 'open') continue;
+    try {
+      dc.send(hdr);
+      for (let off = 0; off < buf.byteLength; off += FILE_CHUNK) {
+        // Backpressure: pause briefly if the channel is congested.
+        while (dc.bufferedAmount > 4 * 1024 * 1024) {
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, 30));
+        }
+        dc.send(buf.slice(off, Math.min(off + FILE_CHUNK, buf.byteLength)));
+      }
+      dc.send(end);
+      sentToPeers++;
+    } catch (e) {
+      __ar.log.warn('[file] send failed peer=' + peer.id, e);
+    }
+  }
+  if (sentToPeers === 0) {
+    showToast('No peers available with an open file channel');
+  } else {
+    showToast(`Sent ${file.name} to ${sentToPeers} peer${sentToPeers === 1 ? '' : 's'}`, 2500);
+    playSound('tick');
+  }
+}
+
+function humanBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
 function setLat(ms) {
   const el = $('lat-badge'), val = $('lat-val');
   if (ms == null) { el.className = 'lat'; val.textContent = '— ms'; return; }
@@ -2700,6 +2835,19 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp
   setViewMode('grid');
   $('view-btn')?.addEventListener('click', cycleViewMode);
   bindVideoGridClicks();
+  //  file attach -> sendFileToAllPeers via per-peer DataChannel
+  $('file-attach-btn')?.addEventListener('click', () => $('file-input')?.click());
+  $('file-input')?.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (file) sendFileToAllPeers(file);
+    e.target.value = ''; // allow re-sending the same file
+  });
+  //  PWA: register service worker for offline app-shell + install prompt
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch((err) => {
+      __ar.log.warn('[pwa] sw register failed', err?.message);
+    });
+  }
   //  pre-join preview: mic VU + echo test
   startJoinPreview().catch(() => {
     /* mic-denied is fine; the user can still try to join */

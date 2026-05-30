@@ -13,6 +13,8 @@
     <title>HALCYON · Realtime mesh voice and video</title>
     <link rel="preload" href="app.js" as="script" crossorigin="anonymous" />
     <link rel="stylesheet" href="style.css" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
   </head>
   <body>
     <!-- Static background. Soft radial. No animation. -->
@@ -219,6 +221,23 @@
             placeholder="Write a message. Enter to send, Shift+Enter for newline."
             maxlength="4000"
           ></textarea>
+          <div class="chat-input-tools">
+            <input
+              type="file"
+              id="file-input"
+              class="sr-only"
+              aria-label="Attach a file to share with every peer"
+            />
+            <button
+              id="file-attach-btn"
+              class="chat-tool-btn"
+              type="button"
+              title="Send a file to every peer in the room (max 200 MB, P2P via DataChannel)"
+              aria-label="Attach a file"
+            >
+              <span data-icon="link"></span><span>Attach</span>
+            </button>
+          </div>
         </div>
       </aside>
 
