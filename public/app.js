@@ -2558,7 +2558,7 @@ function openReactPopover() {
     }
     const em = e.target.closest('.react-emoji');
     if (em) {
-      sendReaction(em.dataset.emoji);
+      sendRoomReaction(em.dataset.emoji);
       closeReactPopover();
     }
   });
@@ -2580,7 +2580,7 @@ function _reactOutsideClick(e) {
   closeReactPopover();
 }
 
-function sendReaction(emoji) {
+function sendRoomReaction(emoji) {
   if (!ws || ws.readyState !== 1) return;
   ws.send(JSON.stringify({ type: 'room:reaction', emoji }));
 }
