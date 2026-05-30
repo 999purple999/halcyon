@@ -264,16 +264,36 @@ const joinScreen = $('join-screen'), roomScreen = $('room-screen');
 // ============================================================================
 //  DEVICE / STREAM
 // ============================================================================
-async function refreshDevices() {
-  let perm;
-  try { perm = await navigator.mediaDevices.getUserMedia({ audio: true }); perm.getTracks().forEach(t => t.stop()); } catch {}
+// refreshDevices(probeForPermission=false): lists audio devices.
+//
+// Historically this used to call getUserMedia({audio:true}) up-front to force
+// the browser to reveal labeled device names. That meant every page load
+// triggered a permission prompt before the user had even seen the join card.
+// If the user dismissed or denied that prompt the browser cached the decision
+// for the origin and the later real getUserMedia at join time silently failed
+// with no clear feedback.
+//
+// Behaviour now: at boot we only call enumerateDevices() without permission,
+// which yields unlabeled "Microphone 1, 2, ..." entries (acceptable). After
+// the first successful acquireStream (i.e. the user clicked Join and granted
+// the mic) the caller passes probeForPermission=true so we re-enumerate with
+// labels visible.
+async function refreshDevices(probeForPermission = false) {
+  if (probeForPermission) {
+    try {
+      const perm = await navigator.mediaDevices.getUserMedia({ audio: true });
+      perm.getTracks().forEach((t) => t.stop());
+    } catch {
+      /* permission denied; we still enumerate below with whatever labels we have */
+    }
+  }
   const devices = await navigator.mediaDevices.enumerateDevices();
-  const mics = devices.filter(d => d.kind === 'audioinput');
-  const outs = devices.filter(d => d.kind === 'audiooutput');
-  fillSelect($('mic-select'), mics, 'Microfono');
-  fillSelect($('mic-room-select'), mics, 'Microfono');
-  if (outs.length) fillSelect($('out-select'), outs, 'Uscita');
-  else $('out-select').innerHTML = '<option>Predefinita</option>';
+  const mics = devices.filter((d) => d.kind === 'audioinput');
+  const outs = devices.filter((d) => d.kind === 'audiooutput');
+  fillSelect($('mic-select'), mics, 'Microphone');
+  fillSelect($('mic-room-select'), mics, 'Microphone');
+  if (outs.length) fillSelect($('out-select'), outs, 'Output');
+  else $('out-select').innerHTML = '<option>Default</option>';
 }
 function fillSelect(sel, devices, label) {
   const cur = sel.value;
@@ -426,17 +446,31 @@ $('join-btn').addEventListener('click', async () => {
   //  camera non più al join, ma da control deck (#camera-btn)
   videoEnabled = false;
   $('join-btn').disabled = true; $('join-error').textContent = '';
+  // Release the preview stream BEFORE acquireStream so the device is free.
+  // Without this, some browsers return the same cached stream and the AEC /
+  // device picker preferences silently miss.
+  stopJoinPreview();
   try {
     localStream = await acquireStream($('mic-select').value);
     _rawMicStream = localStream;
   } catch (err) {
-    $('join-error').textContent = 'Microphone not accessible: ' + err.message;
-    $('join-btn').disabled = false; return;
+    if (err && err.name === 'NotAllowedError') {
+      $('join-error').textContent =
+        'Microphone blocked. Click the lock icon in the address bar and set Microphone to Allow, then reload the page.';
+    } else if (err && err.name === 'NotFoundError') {
+      $('join-error').textContent =
+        'No microphone found. Plug one in or pick another device above.';
+    } else {
+      $('join-error').textContent = 'Microphone not accessible: ' + (err?.message || err?.name);
+    }
+    $('join-btn').disabled = false;
+    return;
   }
+  // After permission granted, re-enumerate to pick up labeled device names.
+  refreshDevices(true).catch(() => {});
   setupSelfAnalyser();
   syncAecUI();
   ensureSelfVideoTile();
-  stopJoinPreview();
   connectSignaling();
   initRoomId();
   joinScreen.classList.add('hidden');
@@ -2848,10 +2882,10 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp
       __ar.log.warn('[pwa] sw register failed', err?.message);
     });
   }
-  //  pre-join preview: mic VU + echo test
-  startJoinPreview().catch(() => {
-    /* mic-denied is fine; the user can still try to join */
-  });
+  //  pre-join preview: opt-in only. The echo test button starts the preview
+  //  on demand. Auto-starting it on boot triggered a getUserMedia prompt before
+  //  the user even saw the page, and a denied prompt got cached for the whole
+  //  origin which then blocked the join flow with no clear feedback.
   $('echo-test-btn')?.addEventListener('click', runEchoTest);
 })();
 
