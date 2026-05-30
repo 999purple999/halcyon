@@ -10,6 +10,12 @@
 
 import { icon } from './icons.js';
 import { playSound, setSoundEnabled, isSoundEnabled } from './sounds.js';
+import {
+  startRecording,
+  stopRecording,
+  isRecording,
+  recordingElapsed,
+} from './recorder.js';
 
 // ---------- LOGGER (vedi raffinamento  §1.Step6) ----------
 (function setupLogger() {
@@ -342,6 +348,7 @@ $('join-btn').addEventListener('click', async () => {
   setupSelfAnalyser();
   syncAecUI();
   ensureSelfVideoTile();
+  stopJoinPreview();
   connectSignaling();
   initRoomId();
   joinScreen.classList.add('hidden');
@@ -2285,7 +2292,173 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp
     syncSoundBtn();
     if (next) playSound('tick');
   });
+  //  meeting recorder toggle (record-btn in topbar)
+  $('record-btn')?.addEventListener('click', toggleRecording);
+  //  pre-join preview: mic VU + echo test
+  startJoinPreview().catch(() => {
+    /* mic-denied is fine; the user can still try to join */
+  });
+  $('echo-test-btn')?.addEventListener('click', runEchoTest);
 })();
+
+// ============================================================================
+// RECORDING (topbar Record button) — local-only via MediaRecorder
+//
+// When clicked, mixes own mic + every peer's incoming audio + screen-share
+// audio (if any) into a single WebM, including camera or screen video when
+// the user is sharing. Stop -> auto-download halcyon-<timestamp>.webm.
+// ============================================================================
+let recTick = null;
+function toggleRecording() {
+  if (isRecording()) {
+    stopRecording();
+    syncRecordUi(false);
+    if (recTick) {
+      clearInterval(recTick);
+      recTick = null;
+    }
+    announce('Recording stopped, downloading');
+    playSound('tick');
+    return;
+  }
+  const peerAudioElements = [...peers.values()].map((p) => p.audioEl).filter(Boolean);
+  const started = startRecording({
+    localStream,
+    peerAudioElements,
+    screenStream: typeof screenStream !== 'undefined' ? screenStream : null,
+    videoStream: typeof cameraStream !== 'undefined' ? cameraStream : null,
+  });
+  if (!started) {
+    showToast('Recording unavailable in this browser');
+    return;
+  }
+  syncRecordUi(true);
+  recTick = setInterval(updateRecordElapsed, 1000);
+  updateRecordElapsed();
+  announce('Recording started');
+  playSound('tick');
+}
+function syncRecordUi(on) {
+  const btn = $('record-btn');
+  if (!btn) return;
+  btn.classList.toggle('recording', on);
+  btn.setAttribute('aria-pressed', String(on));
+  btn.title = on ? 'Stop recording (will download)' : 'Start recording the room';
+  const lbl = btn.querySelector('.record-lbl');
+  if (lbl && !on) lbl.textContent = 'Record';
+}
+function updateRecordElapsed() {
+  const btn = $('record-btn');
+  if (!btn) return;
+  const lbl = btn.querySelector('.record-lbl');
+  if (!lbl) return;
+  const ms = recordingElapsed();
+  const s = Math.floor(ms / 1000);
+  const mm = String(Math.floor(s / 60)).padStart(2, '0');
+  const ss = String(s % 60).padStart(2, '0');
+  lbl.textContent = `${mm}:${ss}`;
+}
+
+// ============================================================================
+// PRE-JOIN PREVIEW — mic VU meter + 3-second echo loopback
+//
+// Lets the user verify the mic works before joining a room (the single most
+// common "I can't hear anything" failure mode). The preview stream is its own
+// short-lived getUserMedia handle, separate from the room stream; it shuts
+// down on Join so the room flow re-acquires the mic cleanly.
+// ============================================================================
+const joinPreview = { stream: null, ctx: null, an: null, buf: null, raf: 0 };
+
+async function startJoinPreview() {
+  if (joinPreview.stream) return;
+  try {
+    joinPreview.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    __ar.log.warn('[join-preview] getUserMedia rejected', e?.name);
+    return;
+  }
+  joinPreview.ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = joinPreview.ctx.createMediaStreamSource(joinPreview.stream);
+  const an = joinPreview.ctx.createAnalyser();
+  an.fftSize = 256;
+  an.smoothingTimeConstant = 0.5;
+  src.connect(an);
+  joinPreview.an = an;
+  joinPreview.buf = new Uint8Array(an.frequencyBinCount);
+  tickJoinVU();
+}
+
+function tickJoinVU() {
+  if (!joinPreview.an) return;
+  joinPreview.an.getByteTimeDomainData(joinPreview.buf);
+  let sum = 0;
+  for (let i = 0; i < joinPreview.buf.length; i++) {
+    const v = (joinPreview.buf[i] - 128) / 128;
+    sum += v * v;
+  }
+  const rms = Math.sqrt(sum / joinPreview.buf.length);
+  const pct = Math.min(100, rms * 280);
+  const fill = $('join-vu-fill');
+  if (fill) fill.style.width = pct + '%';
+  joinPreview.raf = requestAnimationFrame(tickJoinVU);
+}
+
+function stopJoinPreview() {
+  if (joinPreview.raf) cancelAnimationFrame(joinPreview.raf);
+  joinPreview.stream?.getTracks().forEach((t) => t.stop());
+  joinPreview.ctx?.close().catch(() => {});
+  joinPreview.stream = null;
+  joinPreview.ctx = null;
+  joinPreview.an = null;
+  joinPreview.buf = null;
+  joinPreview.raf = 0;
+}
+
+async function runEchoTest() {
+  if (!joinPreview.stream) {
+    await startJoinPreview();
+    if (!joinPreview.stream) return;
+  }
+  const btn = $('echo-test-btn');
+  if (!btn) return;
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const labelSpan = btn.querySelector('span:last-child');
+  const orig = labelSpan ? labelSpan.textContent : '';
+  if (labelSpan) labelSpan.textContent = 'Recording 3s';
+  let mr;
+  try {
+    mr = new MediaRecorder(joinPreview.stream);
+  } catch {
+    btn.disabled = false;
+    if (labelSpan) labelSpan.textContent = orig;
+    return;
+  }
+  const chunks = [];
+  mr.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) chunks.push(e.data);
+  };
+  mr.onstop = () => {
+    if (labelSpan) labelSpan.textContent = 'Playing back';
+    const blob = new Blob(chunks);
+    const url = URL.createObjectURL(blob);
+    const a = new Audio(url);
+    a.play().catch(() => {});
+    a.onended = () => {
+      if (labelSpan) labelSpan.textContent = orig || 'Test mic, 3s loopback';
+      btn.disabled = false;
+      URL.revokeObjectURL(url);
+    };
+  };
+  mr.start();
+  setTimeout(() => {
+    try {
+      mr.stop();
+    } catch {
+      /* already stopped */
+    }
+  }, 3000);
+}
 
 function syncSoundBtn() {
   const btn = $('sound-btn');

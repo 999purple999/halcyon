@@ -1921,6 +1921,143 @@ body.ptt-active::after {
   color: var(--c-text-1);
 }
 
+/* --- Recorder button (topbar) ---------------------------------------------- */
+.record-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-radius: var(--r-md);
+  background: var(--c-bg-2);
+  border: 1px solid var(--c-line-2);
+  color: var(--c-text-1);
+  font-family: inherit;
+  font-size: var(--t-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--m-fast) var(--ease),
+    border-color var(--m-fast) var(--ease),
+    color var(--m-fast) var(--ease);
+  font-variant-numeric: tabular-nums;
+}
+.record-btn:hover {
+  background: var(--c-bg-3);
+  border-color: var(--c-line-3);
+}
+.record-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c-text-3);
+  flex-shrink: 0;
+  transition: background var(--m-med) var(--ease);
+}
+.record-btn.recording {
+  color: var(--c-danger);
+  background: var(--c-danger-weak);
+  border-color: rgba(240, 85, 106, 0.36);
+}
+.record-btn.recording .record-dot {
+  background: var(--c-danger);
+  box-shadow: 0 0 8px var(--c-danger);
+  animation: rec-pulse 1.1s ease-in-out infinite;
+}
+@keyframes rec-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(0.7);
+    opacity: 0.6;
+  }
+}
+@media (max-width: 560px) {
+  .record-btn .record-lbl {
+    display: none;
+  }
+  .record-btn.recording .record-lbl {
+    display: inline;
+  }
+}
+
+/* --- Pre-join preview (mic VU + echo test) -------------------------------- */
+.join-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 20px;
+  padding: 14px;
+  background: var(--c-bg-2);
+  border: 1px solid var(--c-line-2);
+  border-radius: var(--r-md);
+}
+.join-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.join-vu-label {
+  font-size: var(--t-xs);
+  color: var(--c-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.join-vu {
+  flex: 1;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--c-bg-3);
+  overflow: hidden;
+}
+.join-vu-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: var(--r-full);
+  background: linear-gradient(
+    90deg,
+    var(--c-accent) 0%,
+    var(--c-accent) 65%,
+    var(--c-warn) 85%,
+    var(--c-danger) 100%
+  );
+  transition: width 0.06s linear;
+}
+.join-preview-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--c-line-2);
+  background: var(--c-bg-3);
+  color: var(--c-text-1);
+  font-size: var(--t-sm);
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background var(--m-fast) var(--ease),
+    border-color var(--m-fast) var(--ease);
+}
+.join-preview-btn:hover {
+  background: var(--c-bg-4);
+  border-color: var(--c-accent);
+}
+.join-preview-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.join-preview-btn svg {
+  color: var(--c-accent);
+}
+
 /* --- Accessibility -------------------------------------------------------- */
 :where(button, [role='button'], input, select, textarea, a, [tabindex]):focus-visible {
   outline: 2px solid var(--c-accent);
