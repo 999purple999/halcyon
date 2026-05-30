@@ -51,7 +51,10 @@ self.addEventListener('fetch', (event) => {
       .then((res) => {
         // Refresh the cache opportunistically with each successful fetch.
         const copy = res.clone();
-        caches.open(CACHE_NAME).then((c) => c.put(event.request, copy)).catch(() => {});
+        caches
+          .open(CACHE_NAME)
+          .then((c) => c.put(event.request, copy))
+          .catch(() => {});
         return res;
       })
       .catch(() => caches.match(event.request)),
