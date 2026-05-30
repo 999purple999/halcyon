@@ -3,19 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0a0d12" media="(prefers-color-scheme: dark)" />
-    <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0a0c10" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f6f6f8" media="(prefers-color-scheme: light)" />
     <meta name="color-scheme" content="dark light" />
     <meta
       name="description"
-      content="HALCYON — self-hosted realtime mesh voice & video. Local-first, zero-cloud, LAN-only. Mesh WebRTC P2P with end-to-end DTLS-SRTP."
+      content="HALCYON — self-hosted realtime mesh voice and video. Local-first, zero-cloud, LAN-only. Mesh WebRTC P2P with end-to-end DTLS-SRTP."
     />
-    <title>HALCYON · Realtime mesh voice & video (local LAN)</title>
+    <title>HALCYON · Realtime mesh voice and video</title>
     <link rel="preload" href="app.js" as="script" crossorigin="anonymous" />
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <!-- Soft background, gradient + aurora — disabled by prefers-reduced-motion -->
+    <!-- Static background. Soft radial. No animation. -->
     <div class="bg" aria-hidden="true"></div>
 
     <a href="#participants-grid" class="skip-link">Skip to main content</a>
@@ -24,8 +24,10 @@
     <!-- ====================== JOIN ====================== -->
     <div id="join-screen" class="screen">
       <div class="join-card">
-        <h1>HALCYON</h1>
-        <p class="subtitle">Local mesh voice &amp; video · zero-latency P2P · LAN, zero cloud</p>
+        <h1>Halcyon</h1>
+        <p class="subtitle">
+          Local mesh voice and video. Zero-latency peer-to-peer. LAN only, no cloud.
+        </p>
 
         <label for="nickname">Your name</label>
         <input
@@ -39,13 +41,14 @@
         <label for="mic-select">Microphone</label>
         <select id="mic-select"></select>
 
-        <label class="checkbox" title="Recommended when you're in the same room">
+        <label class="checkbox" title="Recommended when participants share the same room">
           <input id="aec-init" type="checkbox" checked />
-          <span>Echo &amp; noise suppression (AEC) — recommended in same room</span>
+          <span>Echo and noise suppression (AEC). Recommended in the same room.</span>
         </label>
 
         <p class="join-hint">
-          📹 Camera and 📺 screen-share can be toggled from the control deck after joining.
+          <span data-icon="video"></span>
+          Camera and screen sharing are available from the control deck after joining.
         </p>
 
         <button id="join-btn" type="button">Join room</button>
@@ -55,18 +58,19 @@
 
     <!-- ====================== ROOM ====================== -->
     <div id="room-screen" class="screen hidden">
-      <!-- Header / network diagnostics -->
       <header class="topbar">
         <div class="net">
-          <span id="lat-badge" class="lat" title="Average latency to peers">
+          <span id="lat-badge" class="lat" title="Average round-trip time to peers">
             <span class="lat-dot"></span><span id="lat-val">— ms</span>
           </span>
-          <span id="topo-badge" class="topo" title="Connection type">⛓ Direct P2P</span>
-          <span id="ws-badge" class="ws" data-state="offline" title="Signaling connection state"
-            >— offline</span
-          >
+          <span id="topo-badge" class="topo" title="Connection topology">
+            <span data-icon="link"></span><span class="label">Direct P2P</span>
+          </span>
+          <span id="ws-badge" class="ws" data-state="offline" title="Signaling connection state">
+            <span class="lat-dot"></span><span class="label">Offline</span>
+          </span>
           <span id="alone-badge" class="alone hidden" title="No one else in the room">
-            👤 You're alone here
+            <span data-icon="user-alone"></span><span>You are alone in the room</span>
           </span>
           <button
             id="test-beep-btn"
@@ -75,7 +79,7 @@
             title="Play a local beep to test audio output"
             aria-label="Play a test beep on the audio output"
           >
-            🔔 Test
+            <span data-icon="bell"></span><span>Test</span>
           </button>
         </div>
         <button
@@ -85,7 +89,7 @@
           title="Click to copy the invite link"
           aria-label="Copy the room invite link"
         >
-          🛰 <span id="room-id-text">Local-Node</span>
+          <span data-icon="link"></span><span id="room-id-text" class="label">Local-Node</span>
         </button>
         <button
           id="chat-toggle"
@@ -96,7 +100,7 @@
           aria-controls="chat-drawer"
           aria-expanded="false"
         >
-          💬 Chat
+          <span data-icon="chat"></span><span class="label">Chat</span>
           <span id="chat-toggle-badge" class="chat-badge hidden" aria-label="Unread messages"
             >0</span
           >
@@ -105,10 +109,10 @@
           id="theme-btn"
           class="theme-btn"
           type="button"
-          title="Switch theme (cosmic → matrix → cyberpunk → apple)"
-          aria-label="Switch theme"
+          title="Cycle theme (graphite, terminal, ember, dawn)"
+          aria-label="Cycle theme"
         >
-          🎨
+          <span data-icon="palette"></span>
         </button>
         <button id="leave-btn" class="ghost" type="button" aria-label="Leave the room">
           Leave
@@ -125,11 +129,10 @@
           tabindex="-1"
         ></div>
         <div id="popover" class="popover hidden"></div>
-        <div id="copy-toast" class="toast hidden">Link copied ✓</div>
+        <div id="copy-toast" class="toast hidden">Link copied</div>
       </main>
 
-      <!-- Audio fallback overlay: appears if the browser blocks play() for
-         autoplay policy. A single click unlocks every audio element. -->
+      <!-- Audio fallback overlay. -->
       <div
         id="audio-gate"
         class="audio-gate hidden"
@@ -138,22 +141,19 @@
         aria-label="Tap to enable room audio"
       >
         <div class="audio-gate-card">
-          <div class="audio-gate-icon">🔊</div>
+          <div class="audio-gate-icon" data-icon="headphones" data-icon-size="26"></div>
           <h3>Tap to enable audio</h3>
-          <p>
-            The browser blocked autoplay.<br />
-            A single click unlocks every voice in the room.
-          </p>
+          <p>The browser blocked autoplay. A single click unlocks every voice in the room.</p>
           <button id="audio-gate-btn" class="audio-gate-btn" type="button">Enable audio</button>
         </div>
       </div>
 
-      <!-- ===== Chat drawer ===== -->
+      <!-- Chat drawer -->
       <aside id="chat-drawer" class="chat-drawer" aria-label="Room chat" aria-hidden="true">
         <header class="chat-header">
-          <h3>💬 Chat</h3>
+          <h3><span data-icon="chat"></span>Chat</h3>
           <button id="chat-close" class="chat-close" type="button" aria-label="Close chat">
-            ✕
+            <span data-icon="x"></span>
           </button>
         </header>
         <div id="chat-list" class="chat-list" role="log" aria-live="polite"></div>
@@ -163,21 +163,23 @@
             id="chat-input"
             class="chat-input"
             rows="2"
-            placeholder="Write a message… (Enter to send, Shift+Enter for newline)"
+            placeholder="Write a message. Enter to send, Shift+Enter for newline."
             maxlength="4000"
           ></textarea>
         </div>
       </aside>
 
-      <!-- ===== Video grid ===== -->
+      <!-- Video grid -->
       <div id="video-grid" class="video-grid hidden" aria-label="Participant videos"></div>
 
-      <!-- ===== Stats Dashboard / Debug (toggle Ctrl+Shift+D) ===== -->
+      <!-- Stats / Debug panel (toggle Ctrl+Shift+D) -->
       <div id="stats-panel" class="stats-panel hidden" aria-label="Stats panel">
         <header class="stats-header">
-          <h3>📊 Stats · Debug</h3>
-          <span class="stats-hint">Ctrl+Shift+D toggle</span>
-          <button id="stats-close" class="stats-close" type="button" aria-label="Close">✕</button>
+          <h3><span data-icon="gauge"></span>Stats and debug</h3>
+          <span class="stats-hint">Ctrl+Shift+D to toggle</span>
+          <button id="stats-close" class="stats-close" type="button" aria-label="Close">
+            <span data-icon="x"></span>
+          </button>
         </header>
         <div class="stats-body">
           <table class="stats-table">
@@ -224,7 +226,7 @@
               aria-label="Silence incoming audio"
               aria-pressed="false"
             >
-              <span class="ico" aria-hidden="true">🔊</span>
+              <span class="ico" data-icon="headphones" aria-hidden="true"></span>
             </button>
             <span class="deck-lbl">Audio</span>
           </div>
@@ -241,11 +243,11 @@
               id="mute-btn"
               class="round-btn big live"
               type="button"
-              title="Mic on/off (M, hold Space for push-to-talk)"
-              aria-label="Mic on/off"
+              title="Microphone on/off (M, hold Space for push-to-talk)"
+              aria-label="Microphone on/off"
               aria-pressed="true"
             >
-              <span class="ico" aria-hidden="true">🎙</span>
+              <span class="ico" data-icon="mic" aria-hidden="true"></span>
             </button>
             <span class="deck-lbl">Mic</span>
           </div>
@@ -258,10 +260,12 @@
               type="button"
               role="switch"
               aria-checked="true"
-              aria-label="Acoustic Echo Cancellation"
-              title="Acoustic Echo Cancellation — recommended in same room"
+              aria-label="Acoustic echo cancellation"
+              title="Acoustic echo cancellation. Recommended in the same room."
             >
-              <span class="knob"><span class="shield" aria-hidden="true">🛡</span></span>
+              <span class="knob"
+                ><span class="shield" data-icon="shield" aria-hidden="true"></span
+              ></span>
             </button>
             <span class="deck-lbl">AEC</span>
           </div>
@@ -276,7 +280,7 @@
               aria-label="Toggle camera"
               aria-pressed="false"
             >
-              <span class="ico" aria-hidden="true">📹</span>
+              <span class="ico" data-icon="video" aria-hidden="true"></span>
             </button>
             <span class="deck-lbl">Camera</span>
           </div>
@@ -291,13 +295,34 @@
               aria-label="Share screen"
               aria-pressed="false"
             >
-              <span class="ico" aria-hidden="true">📺</span>
+              <span class="ico" data-icon="monitor" aria-hidden="true"></span>
             </button>
             <span class="deck-lbl">Screen</span>
           </div>
         </div>
       </footer>
     </div>
+
+    <!-- Icon bootstrap: every [data-icon] in static markup gets filled at DOMContentLoaded.
+         Dynamic icons (mute toggle, deafen toggle, etc) are mutated by app.js using the
+         same `icon()` function imported from icons.js. -->
+    <script type="module">
+      import { icon } from './icons.js';
+      function fillStaticIcons(root = document) {
+        for (const el of root.querySelectorAll('[data-icon]')) {
+          if (el.dataset.iconFilled === '1') continue;
+          const size = Number(el.dataset.iconSize) || 18;
+          el.innerHTML = icon(el.dataset.icon, { size });
+          el.dataset.iconFilled = '1';
+        }
+      }
+      window.__fillIcons = fillStaticIcons;
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => fillStaticIcons());
+      } else {
+        fillStaticIcons();
+      }
+    </script>
 
     <script src="app.js" type="module"></script>
   </body>

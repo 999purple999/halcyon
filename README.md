@@ -34,7 +34,7 @@ on the server.
 - **Multi-room** via `?room=<id>` URL parameter, chat scoped per room.
 - **Markdown chat** with reactions, edits, soft-delete, mention
   rendering, XSS-safe parser (URL whitelist `https?:` / `mailto:` only).
-- **Four themes**: default cosmic, Matrix, Cyberpunk, Apple Glass.
+- **Four themes**: Graphite (default), Terminal, Ember, Dawn. Neutral by default with a single emerald accent reserved for live and online states.
 - **Accessible**: WCAG-aligned focus indicators, ARIA pressed/expanded
   state, live-region announcements, `prefers-reduced-motion` &
   `prefers-contrast` aware.
@@ -185,6 +185,31 @@ runtime (the same code path that screen-share uses), then asserting
 zero entries in the client error ring.
 
 ## Changelog
+
+### v1.3.0
+
+- **UI redesign: design system v2 (graphite).** Sober, neutral-first palette with
+  one accent (emerald) used only for live / online states. Replaced the cosmic
+  shimmer logo and aurora background animation with a static, calm gradient that
+  is correctly disabled for `prefers-reduced-motion`.
+- **SVG icon library.** New `public/icons.js` exposes a single function
+  `icon(name, opts)` returning a Lucide-style inline SVG string. The library
+  drives every glyph in the UI: control deck buttons (mic, headphones, video,
+  monitor), status badges (link, gauge, palette, bell, shield), chat header,
+  audio gate. Static markup uses `data-icon="..."` placeholders auto-filled at
+  `DOMContentLoaded`; dynamic toggles call `icon()` directly. No emoji left in
+  the UI shell, only in chat reactions where users actually want them.
+- **Refined control deck.** Round buttons swapped for soft squircles (16px
+  radius), the central mic kill-switch gains an accent ring when live and a
+  rose ring when muted. AEC switch knob is tighter and reveals the shield icon
+  only when on.
+- **Tighter typography.** Inter when available, system fallback. Negative
+  letter-spacing on headings (-0.025em), tabular numerics for all latency,
+  bitrate, FPS, and timestamp readouts.
+- **Theme rename + cleanup.** `data-theme` attribute values are unchanged for
+  backward compatibility, but their visual identity and label changed:
+  cosmic to Graphite (default), matrix to Terminal, cyberpunk to Ember,
+  apple to Dawn.
 
 ### v1.2.1
 

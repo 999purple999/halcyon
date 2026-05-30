@@ -8,6 +8,8 @@
 // Livello logger: URL ?log=debug|info|warn|error > localStorage > "info"
 // ============================================================================
 
+import { icon } from './icons.js';
+
 // ---------- LOGGER (vedi raffinamento  §1.Step6) ----------
 (function setupLogger() {
   const LV = { debug: 10, info: 20, warn: 30, error: 40 };
@@ -374,13 +376,17 @@ function setWsState(s) {
   if (!el) return;
   el.dataset.state = s;
   const TXT = {
-    online: '🟢 Online',
-    connecting: '⏳ Connecting…',
-    reconnecting: '🟡 Reconnecting…',
-    dead: '🔴 Offline',
-    offline: '— offline',
+    online: 'Online',
+    connecting: 'Connecting',
+    reconnecting: 'Reconnecting',
+    dead: 'Offline',
+    offline: 'Offline',
   };
-  el.textContent = TXT[s] || s;
+  // Markup: <span class="lat-dot"></span><span class="label">…</span>
+  // Color of the dot + label tint is driven by the [data-state] selector in CSS.
+  const label = el.querySelector('.label');
+  if (label) label.textContent = TXT[s] || s;
+  else el.textContent = TXT[s] || s;
 }
 
 function scheduleReconnect() {
@@ -944,7 +950,7 @@ function renderParticipantsGrid() {
         return `<div class="${cls.join(' ')}" role="listitem" data-pid="${escapeHtml(String(sid))}" tabindex="0" aria-label="${escapeHtml(name)}${muted ? ' (mic muted)' : speaking ? ' (speaking)' : ''}">
           <div class="participant-avatar"><span>${escapeHtml(init)}</span></div>
           <div class="participant-name">${escapeHtml(name)}</div>
-          ${muted ? '<div class="participant-badge">🔇</div>' : speaking ? '<div class="participant-badge speak-badge">🎙</div>' : ''}
+          ${muted ? `<div class="participant-badge mute-badge" title="Microphone muted">${icon('mic-off', { size: 14 })}</div>` : speaking ? `<div class="participant-badge speak-badge" title="Speaking">${icon('mic', { size: 14 })}</div>` : ''}
         </div>`;
       })
       .join('');
@@ -1025,7 +1031,7 @@ document.addEventListener('click', (e) => {
 function openPeerPopover(peer, x, y) {
   const po = $('popover');
   po.innerHTML = `<h4>${escapeHtml(peer.name)}</h4>
-    <div class="row"><span>🔈</span><input type="range" min="0" max="200" value="${Math.round(peer.volume * 100)}"></div>
+    <div class="row">${icon('headphones', { size: 16 })}<input type="range" min="0" max="200" value="${Math.round(peer.volume * 100)}"></div>
     <button class="pbtn danger">Mute this user</button>`;
   const range = po.querySelector('input');
   range.addEventListener('input', () => {
@@ -1071,7 +1077,7 @@ $('mute-btn').addEventListener('click', () => {
   btn.classList.toggle('off', !micEnabled);
   btn.classList.toggle('live', micEnabled);
   btn.setAttribute('aria-pressed', String(micEnabled));
-  btn.querySelector('.ico').textContent = micEnabled ? '🎙' : '🔇';
+  btn.querySelector('.ico').innerHTML = icon(micEnabled ? 'mic' : 'mic-off', { size: 22 });
   announce(micEnabled ? 'Microphone live' : 'Microphone muted');
 });
 $('deafen-btn').addEventListener('click', () => {
@@ -1084,7 +1090,7 @@ $('deafen-btn').addEventListener('click', () => {
   const btn = $('deafen-btn');
   btn.classList.toggle('off', deafened);
   btn.setAttribute('aria-pressed', String(deafened));
-  btn.querySelector('.ico').textContent = deafened ? '🔇' : '🔊';
+  btn.querySelector('.ico').innerHTML = icon(deafened ? 'headphones-off' : 'headphones', { size: 20 });
   announce(deafened ? 'Incoming audio silenced' : 'Incoming audio restored');
 });
 $('aec-toggle').addEventListener('click', async () => {
@@ -1249,7 +1255,7 @@ function updateCameraUi(active) {
   if (!btn) return;
   btn.classList.toggle('active', active);
   btn.setAttribute('aria-pressed', String(active));
-  btn.querySelector('.ico').textContent = active ? '🛑' : '📹';
+  btn.querySelector('.ico').innerHTML = icon(active ? 'video-off' : 'video', { size: 20 });
   btn.title = active ? 'Turn camera off (C)' : 'Turn camera on (C)';
 }
 
@@ -1403,7 +1409,7 @@ function ensureSelfScreenTile(stream) {
   const audioOn = stream.getAudioTracks().length > 0;
   const label = document.createElement('div');
   label.className = 'video-label';
-  label.textContent = audioOn ? '📺🔊 Sharing screen + audio' : '📺 Sharing your screen';
+  label.innerHTML = icon('monitor', { size: 14 }) + (audioOn ? ' Sharing screen and audio' : ' Sharing your screen');
   tile.appendChild(video);
   tile.appendChild(label);
   grid.appendChild(tile);
@@ -1416,7 +1422,7 @@ function updateScreenShareUi(active) {
   if (!btn) return;
   btn.classList.toggle('active', active);
   btn.setAttribute('aria-pressed', String(active));
-  btn.querySelector('.ico').textContent = active ? '⏹' : '📺';
+  btn.querySelector('.ico').innerHTML = icon(active ? 'stop' : 'monitor', { size: 20 });
   btn.title = active ? 'Stop sharing (S)' : 'Share screen (S)';
 }
 
@@ -1434,10 +1440,10 @@ $('leave-btn').addEventListener('click', () => {
 // ============================================================================
 const THEMES = ['default', 'matrix', 'cyberpunk', 'apple'];
 const THEME_LABELS = {
-  default: '🌌 Cosmic',
-  matrix: '💚 Matrix',
-  cyberpunk: '⚡ Cyberpunk',
-  apple: '🍎 Apple',
+  default: 'Graphite',
+  matrix: 'Terminal',
+  cyberpunk: 'Ember',
+  apple: 'Dawn',
 };
 
 function applyTheme(name) {
@@ -1514,7 +1520,7 @@ function setMic(enabled) {
   $('mute-btn')?.classList.toggle('off', !enabled);
   $('mute-btn')?.classList.toggle('live', enabled);
   const ico = $('mute-btn')?.querySelector('.ico');
-  if (ico) ico.textContent = enabled ? '🎙' : '🔇';
+  if (ico) ico.innerHTML = icon(enabled ? 'mic' : 'mic-off', { size: 22 });
 }
 
 document.addEventListener('keydown', (e) => {
@@ -1583,7 +1589,7 @@ function toggleShortcutsCheatsheet() {
   cheatsheetEl = document.createElement('div');
   cheatsheetEl.className = 'shortcuts-cheatsheet';
   cheatsheetEl.innerHTML = `
-    <h3>⌨ Keyboard shortcuts</h3>
+    <h3>${icon('keyboard', { size: 18 })}Keyboard shortcuts</h3>
     <table>
       <tr><th>Key</th><th>Action</th></tr>
       <tr><td><kbd>M</kbd></td><td>Mic on/off</td></tr>
@@ -2045,7 +2051,9 @@ function setLat(ms) {
 function setTopo(relay) {
   const el = $('topo-badge');
   el.className = 'topo' + (relay ? ' relay' : '');
-  el.textContent = relay ? '↩ Relay (TURN)' : '⛓ Direct P2P';
+  el.innerHTML = relay
+    ? `${icon('refresh', { size: 14 })}<span class="label">Relay (TURN)</span>`
+    : `${icon('link', { size: 14 })}<span class="label">Direct P2P</span>`;
 }
 
 // ============================================================================
