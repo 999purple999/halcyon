@@ -1,10 +1,15 @@
 // HALCYON — minimal service worker for the app shell.
-// Pre-caches the static assets at install so the UI loads instantly on cold
-// start, even when the LAN signaling server takes a moment to respond. The
-// API and WebSocket path are excluded from the cache: they must always hit
-// the live server.
+//
+// Strategy: network-first with cache fallback. For an actively developed app
+// served on the LAN, cache-first surprises users by holding stale code across
+// reloads even after the new version is on disk. Network-first means every
+// reload sees the latest server response when the server is reachable, and
+// the cache only kicks in for true offline scenarios.
+//
+// /api and /ws bypass the worker entirely so the live signaling path stays
+// untouched.
 
-const CACHE_NAME = 'halcyon-v1';
+const CACHE_NAME = 'halcyon-v2';
 const ASSETS = [
   '/',
   '/index.html',
@@ -41,5 +46,14 @@ self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
   if (url.pathname.startsWith('/api/') || url.pathname === '/ws') return;
-  event.respondWith(caches.match(event.request).then((hit) => hit || fetch(event.request)));
+  event.respondWith(
+    fetch(event.request)
+      .then((res) => {
+        // Refresh the cache opportunistically with each successful fetch.
+        const copy = res.clone();
+        caches.open(CACHE_NAME).then((c) => c.put(event.request, copy)).catch(() => {});
+        return res;
+      })
+      .catch(() => caches.match(event.request)),
+  );
 });
