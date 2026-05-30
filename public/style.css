@@ -1784,23 +1784,83 @@ body.ptt-active::after {
   .lobby {
     padding: 16px;
   }
+  .stats-panel {
+    min-width: 0;
+    width: calc(100vw - 24px);
+    left: 12px;
+    right: 12px;
+  }
 }
+
 @media (max-width: 560px) {
-  .deck-row {
-    gap: 12px;
+  /* Topbar: scroll horizontally if it overflows, hide secondary labels. */
+  .topbar {
+    padding: 6px 10px;
+    gap: 6px;
+    row-gap: 6px;
   }
-  .io-select {
-    max-width: 110px;
+  .net {
+    flex: 0 0 100%;
+    order: 2;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    flex-wrap: nowrap;
+    padding-bottom: 2px;
   }
-  .room-id {
-    max-width: 140px;
-  }
-  .room-id .label {
+  .net::-webkit-scrollbar {
     display: none;
   }
-  .chat-drawer {
-    width: 100vw;
-    max-width: 100vw;
+  .lat,
+  .topo,
+  .ws,
+  .alone,
+  .test-beep {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .room-id .label,
+  .chat-toggle .label,
+  .topo .label {
+    display: none;
+  }
+  .room-id,
+  .chat-toggle {
+    padding: 6px 10px;
+  }
+  .ghost {
+    padding: 6px 10px;
+  }
+  .lobby {
+    padding: 12px;
+  }
+  .participants-grid {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+  }
+  .participant {
+    padding: 12px;
+    gap: 8px;
+  }
+  .participant-avatar {
+    width: 60px;
+    height: 60px;
+    font-size: 22px;
+  }
+  .participant-name {
+    font-size: var(--t-sm);
+  }
+  /* Control deck: stack the IO-select above the buttons; reduce footprint */
+  .deck {
+    padding: 14px 12px 12px;
+  }
+  .deck-row {
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .io-select {
+    max-width: 96px;
+    font-size: 10px;
   }
   .round-btn {
     width: 48px;
@@ -1812,9 +1872,53 @@ body.ptt-active::after {
     height: 60px;
     border-radius: 16px;
   }
-  .participants-grid {
-    gap: 10px;
+  .deck-lbl {
+    font-size: 10px;
   }
+  /* Chat drawer: full-width overlay on phones */
+  .chat-drawer {
+    width: 100vw;
+    max-width: 100vw;
+    border-left: none;
+  }
+  /* Video grid: smaller tiles, anchored closer to deck */
+  .video-grid {
+    bottom: 184px;
+    max-height: calc(100vh - 280px);
+  }
+  /* Join card full-width with reduced padding */
+  .join-card {
+    padding: 26px 22px;
+    border-radius: var(--r-md);
+  }
+  .join-card h1 {
+    font-size: var(--t-xl);
+  }
+  /* Modals stretch toward full-width */
+  .shortcuts-cheatsheet,
+  .share-menu {
+    min-width: 0;
+    width: calc(100vw - 24px);
+    padding: 18px 18px 14px;
+  }
+}
+
+/* iOS safe-area: keep deck above home-bar / dynamic island */
+@supports (padding: max(0px)) {
+  .deck {
+    padding-bottom: max(18px, env(safe-area-inset-bottom));
+  }
+  .topbar {
+    padding-top: max(10px, env(safe-area-inset-top));
+  }
+}
+
+/* Sound-toggle muted state */
+#sound-btn.muted {
+  color: var(--c-text-3);
+}
+#sound-btn.muted:hover {
+  color: var(--c-text-1);
 }
 
 /* --- Accessibility -------------------------------------------------------- */

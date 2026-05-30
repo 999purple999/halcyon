@@ -9,6 +9,7 @@
 // ============================================================================
 
 import { icon } from './icons.js';
+import { playSound, setSoundEnabled, isSoundEnabled } from './sounds.js';
 
 // ---------- LOGGER (vedi raffinamento  §1.Step6) ----------
 (function setupLogger() {
@@ -452,6 +453,7 @@ function openSocket() {
       case 'peer-joined':
         ensurePeerMesh(msg.id, msg.name, true);
         updateAloneBadge();
+        playSound('join');
         break;
       case 'peer-renamed': {
         const p = peers.get(msg.id);
@@ -461,6 +463,7 @@ function openSocket() {
       case 'peer-left':
         removePeer(msg.id);
         updateAloneBadge();
+        playSound('leave');
         break;
       case 'signal':
         await handleSignal(msg.from, msg.data);
@@ -1101,6 +1104,7 @@ $('mute-btn').addEventListener('click', () => {
   btn.setAttribute('aria-pressed', String(micEnabled));
   btn.querySelector('.ico').innerHTML = icon(micEnabled ? 'mic' : 'mic-off', { size: 22 });
   announce(micEnabled ? 'Microphone live' : 'Microphone muted');
+  playSound('tick');
 });
 $('deafen-btn').addEventListener('click', () => {
   deafened = !deafened;
@@ -1114,6 +1118,7 @@ $('deafen-btn').addEventListener('click', () => {
   btn.setAttribute('aria-pressed', String(deafened));
   btn.querySelector('.ico').innerHTML = icon(deafened ? 'headphones-off' : 'headphones', { size: 20 });
   announce(deafened ? 'Incoming audio silenced' : 'Incoming audio restored');
+  playSound('tick');
 });
 $('aec-toggle').addEventListener('click', async () => {
   aecOn = !aecOn; syncAecUI();
@@ -1741,6 +1746,7 @@ document.addEventListener('keydown', (e) => {
         pttRestoreMute = true;
         setMic(true);
         document.body.classList.add('ptt-active');
+        playSound('pttOn');
       }
       break;
   }
@@ -1754,6 +1760,7 @@ document.addEventListener('keyup', (e) => {
       pttRestoreMute = false;
     }
     document.body.classList.remove('ptt-active');
+    playSound('pttOff');
   }
 });
 
@@ -1866,6 +1873,7 @@ function onChatMessage(m) {
     chatState.unread++;
     updateChatBadge();
     announce(`Nuovo messaggio in chat da ${m.fromName}`);
+    playSound('msg');
   }
 }
 
@@ -2269,5 +2277,24 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp
   //  theme switcher
   bootTheme();
   $('theme-btn')?.addEventListener('click', cycleTheme);
+  //  notification sounds toggle (bell-btn in topbar)
+  syncSoundBtn();
+  $('sound-btn')?.addEventListener('click', () => {
+    const next = !isSoundEnabled();
+    setSoundEnabled(next);
+    syncSoundBtn();
+    if (next) playSound('tick');
+  });
 })();
+
+function syncSoundBtn() {
+  const btn = $('sound-btn');
+  if (!btn) return;
+  const on = isSoundEnabled();
+  btn.classList.toggle('muted', !on);
+  btn.setAttribute('aria-pressed', String(on));
+  btn.title = on ? 'Mute notification sounds' : 'Enable notification sounds';
+  const ico = btn.querySelector('.ico');
+  if (ico) ico.innerHTML = icon(on ? 'bell' : 'bell-off', { size: 18 });
+}
 navigator.mediaDevices.addEventListener?.('devicechange', refreshDevices);
