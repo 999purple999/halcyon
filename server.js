@@ -597,6 +597,27 @@ wss.on('connection', (ws) => {
         }
         break;
       }
+      // Ephemeral floating reaction. Broadcasts to the whole room (including the
+      // sender) so every client renders the same emoji-fly-up over the sender's
+      // avatar. No persistence.
+      case 'room:reaction': {
+        const peer = peers.get(id);
+        if (!peer) break;
+        const emoji = String(msg.emoji || '').slice(0, 8);
+        if (!emoji) break;
+        broadcast({ type: 'room:reaction', from: id, fromName: peer.name, emoji }, null, id);
+        break;
+      }
+      // Hand-raise / hand-lower. Broadcast the new state to the whole room so
+      // every client paints the badge on the sender's tile. Stored on the
+      // peer record so a late joiner could later be told the current set.
+      case 'room:hand': {
+        const peer = peers.get(id);
+        if (!peer) break;
+        peer.handRaised = !!msg.raised;
+        broadcast({ type: 'room:hand', from: id, raised: peer.handRaised }, null, id);
+        break;
+      }
       default:
         break;
     }

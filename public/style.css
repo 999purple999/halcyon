@@ -2058,6 +2058,133 @@ body.ptt-active::after {
   color: var(--c-accent);
 }
 
+/* --- React popover (hand-raise + 6 emojis) --------------------------------- */
+.react-popover {
+  position: fixed;
+  z-index: 60;
+  background: var(--c-bg-3);
+  border: 1px solid var(--c-line-2);
+  border-radius: var(--r-md);
+  padding: 10px;
+  box-shadow: var(--e-3);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: pop-in 0.18s var(--ease);
+}
+.react-hand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--c-line-2);
+  background: var(--c-bg-2);
+  color: var(--c-text-1);
+  font-family: inherit;
+  font-size: var(--t-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--m-fast) var(--ease),
+    border-color var(--m-fast) var(--ease),
+    color var(--m-fast) var(--ease);
+}
+.react-hand:hover {
+  background: var(--c-bg-4);
+  border-color: var(--c-accent);
+}
+.react-hand.on {
+  background: var(--c-accent-weak);
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+}
+.react-row {
+  display: flex;
+  gap: 4px;
+}
+.react-emoji {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  background: var(--c-bg-2);
+  font-size: 20px;
+  cursor: pointer;
+  font-family: inherit;
+  transition:
+    transform var(--m-fast) var(--ease),
+    background var(--m-fast) var(--ease),
+    border-color var(--m-fast) var(--ease);
+}
+.react-emoji:hover {
+  background: var(--c-bg-4);
+  border-color: var(--c-line-3);
+  transform: scale(1.15);
+}
+
+/* React deck button: emerald glow when own hand is up */
+#react-btn.hand-up {
+  background: var(--c-accent-weak);
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+}
+
+/* Hand-up tile + badge */
+.participant.hand-up {
+  border-color: var(--c-warn);
+  box-shadow:
+    0 0 0 2px rgba(232, 178, 87, 0.25),
+    var(--e-1);
+}
+.participant-badge.hand-badge {
+  color: var(--c-warn);
+  background: var(--c-warn-weak);
+  border-color: rgba(232, 178, 87, 0.45);
+  animation: hand-bob 1.6s ease-in-out infinite;
+}
+@keyframes hand-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+/* Floating emoji over participant tile (1.4s rise + fade) */
+.float-emoji {
+  position: absolute;
+  left: 50%;
+  bottom: 30%;
+  font-size: 28px;
+  pointer-events: none;
+  user-select: none;
+  transform: translateX(calc(-50% + var(--jx, 0px))) translateY(0) scale(0.4);
+  opacity: 0;
+  animation: float-up 1.4s var(--ease) forwards;
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.4));
+}
+@keyframes float-up {
+  0% {
+    opacity: 0;
+    transform: translateX(calc(-50% + var(--jx, 0px))) translateY(0) scale(0.4);
+  }
+  20% {
+    opacity: 1;
+    transform: translateX(calc(-50% + var(--jx, 0px))) translateY(-20px) scale(1.2);
+  }
+  60% {
+    opacity: 1;
+    transform: translateX(calc(-50% + var(--jx, 0px))) translateY(-80px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(calc(-50% + var(--jx, 0px))) translateY(-140px) scale(0.9);
+  }
+}
+
 /* --- Accessibility -------------------------------------------------------- */
 :where(button, [role='button'], input, select, textarea, a, [tabindex]):focus-visible {
   outline: 2px solid var(--c-accent);

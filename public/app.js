@@ -254,7 +254,7 @@ const SPEAK_TH = 0.055;    // soglia "sta parlando" (RMS)
 const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
 // ---------- Self ----------
-const self = { id: 'self', name: '', rms: 0, env: new Float32Array(ENV_LEN), speaking: false, analyser: null, ctx: null };
+const self = { id: 'self', name: '', rms: 0, env: new Float32Array(ENV_LEN), speaking: false, analyser: null, ctx: null, handRaised: false };
 
 // ---------- DOM ----------
 const $ = (id) => document.getElementById(id);
@@ -485,6 +485,9 @@ function openSocket() {
       case 'chat:typing': onChatTyping(msg); break;
       case 'chat:react:ack': onChatReactionUpdate(msg); break;
       case 'chat:error': __ar.log.warn('[chat]', msg.reason, msg.msgId || ''); break;
+      //  room signals: floating reactions + hand-raise
+      case 'room:reaction': onRoomReaction(msg); break;
+      case 'room:hand': onRoomHand(msg); break;
     }
   });
 }
@@ -516,6 +519,7 @@ function makeNode(name) {
     name, pc: null, audioEl: null, volume: 1,
     rms: 0, env: new Float32Array(ENV_LEN), speaking: false,
     analyser: null, ctx: null,
+    handRaised: false,
     x: 0, y: 0, fx: Math.random() * 6.28, fy: Math.random() * 6.28,
   };
 }
@@ -963,7 +967,7 @@ function renderParticipantsGrid() {
   for (const n of all) {
     const isSelf = n === self;
     const muted = isSelf && !micEnabled;
-    sig += (isSelf ? 'S' : n.id || '?') + '|' + (n.name || '') + '|' + (n.speaking && !muted ? 's' : '.') + (muted ? 'm' : '.') + ';';
+    sig += (isSelf ? 'S' : n.id || '?') + '|' + (n.name || '') + '|' + (n.speaking && !muted ? 's' : '.') + (muted ? 'm' : '.') + (n.handRaised ? 'h' : '.') + ';';
   }
   if (sig !== _lastGridSig) {
     _lastGridSig = sig;
@@ -972,17 +976,21 @@ function renderParticipantsGrid() {
         const isSelf = n === self;
         const muted = isSelf && !micEnabled;
         const speaking = n.speaking && !muted;
+        const handUp = !!n.handRaised;
         const name = isSelf ? myName + ' (you)' : n.name || '?';
         const init = initials(name);
         const cls = ['participant'];
         if (isSelf) cls.push('self');
         if (speaking) cls.push('speaking');
         if (muted) cls.push('muted');
+        if (handUp) cls.push('hand-up');
         const sid = isSelf ? 'self' : n.id;
-        return `<div class="${cls.join(' ')}" role="listitem" data-pid="${escapeHtml(String(sid))}" tabindex="0" aria-label="${escapeHtml(name)}${muted ? ' (mic muted)' : speaking ? ' (speaking)' : ''}">
+        const handTag = handUp ? ' (hand raised)' : '';
+        const stateTag = muted ? ' (mic muted)' : speaking ? ' (speaking)' : '';
+        return `<div class="${cls.join(' ')}" role="listitem" data-pid="${escapeHtml(String(sid))}" tabindex="0" aria-label="${escapeHtml(name)}${stateTag}${handTag}">
           <div class="participant-avatar"><span>${escapeHtml(init)}</span></div>
           <div class="participant-name">${escapeHtml(name)}</div>
-          ${muted ? `<div class="participant-badge mute-badge" title="Microphone muted">${icon('mic-off', { size: 14 })}</div>` : speaking ? `<div class="participant-badge speak-badge" title="Speaking">${icon('mic', { size: 14 })}</div>` : ''}
+          ${handUp ? `<div class="participant-badge hand-badge" title="Hand raised">${icon('hand', { size: 14 })}</div>` : muted ? `<div class="participant-badge mute-badge" title="Microphone muted">${icon('mic-off', { size: 14 })}</div>` : speaking ? `<div class="participant-badge speak-badge" title="Speaking">${icon('mic', { size: 14 })}</div>` : ''}
         </div>`;
       })
       .join('');
@@ -1735,6 +1743,9 @@ document.addEventListener('keydown', (e) => {
     case 't':
       playTestBeep();
       break;
+    case 'r':
+      openReactPopover();
+      break;
     case '?':
       toggleShortcutsCheatsheet();
       break;
@@ -1744,6 +1755,7 @@ document.addEventListener('keydown', (e) => {
       closeStatsPanel?.();
       hideShortcutsCheatsheet();
       closeShareMenu?.();
+      closeReactPopover?.();
       break;
     case ' ':
       // Push-to-talk: se mic muto, attiviamo finche' tenuto premuto
@@ -2102,24 +2114,42 @@ window.__ar.chat = () => ({
 // ============================================================================
 async function pollStats() {
   if (document.hidden) return; // perf: niente getStats() in background tab
-  const pcs = [...peers.values()].map((p) => p.pc).filter(Boolean);
+  const entries = [...peers.values()].filter((p) => p.pc).map((p) => ({ peer: p, pc: p.pc }));
   const rtts = [];
   let relay = false,
     any = false;
-  for (const pc of pcs) {
+  for (const { peer, pc } of entries) {
+    let peerRtt = null;
+    let peerLossPct = null;
     try {
       const stats = await pc.getStats();
-      stats.forEach(r => {
+      stats.forEach((r) => {
         if (r.type === 'candidate-pair' && r.state === 'succeeded' && r.nominated) {
           any = true;
-          if (typeof r.currentRoundTripTime === 'number') rtts.push(r.currentRoundTripTime * 1000);
-          const lc = stats.get(r.localCandidateId), rc = stats.get(r.remoteCandidateId);
+          if (typeof r.currentRoundTripTime === 'number') {
+            const ms = r.currentRoundTripTime * 1000;
+            rtts.push(ms);
+            peerRtt = ms;
+          }
+          const lc = stats.get(r.localCandidateId),
+            rc = stats.get(r.remoteCandidateId);
           if (lc?.candidateType === 'relay' || rc?.candidateType === 'relay') relay = true;
         }
+        if (r.type === 'inbound-rtp' && r.kind === 'audio') {
+          if (typeof r.packetsLost === 'number' && typeof r.packetsReceived === 'number') {
+            const total = r.packetsLost + r.packetsReceived;
+            if (total > 0) peerLossPct = (r.packetsLost / total) * 100;
+          }
+        }
       });
-    } catch {}
+    } catch {
+      /* swallow per-pc errors */
+    }
+    if (peerRtt !== null || peerLossPct !== null) {
+      reportQuality(peer.id, peer.name, peerRtt, peerLossPct);
+    }
   }
-  setLat(rtts.length ? Math.round(rtts.reduce((a, b) => a + b, 0) / rtts.length) : (any ? 1 : null));
+  setLat(rtts.length ? Math.round(rtts.reduce((a, b) => a + b, 0) / rtts.length) : any ? 1 : null);
   setTopo(relay);
 }
 // ============================================================================
@@ -2232,6 +2262,167 @@ async function renderStatsPanel() {
 
 setInterval(renderStatsPanel, 1500);
 
+// ============================================================================
+// ROOM SIGNALS — floating reactions + hand-raise
+//
+// The reactions popover lives above the React deck button. Picking an emoji
+// (or pressing the hand toggle) sends a WS message; the server fans it out to
+// the whole room. Receiver-side, an emoji floats up over the sender's avatar
+// for ~1.4s, and hand-raise paints a persistent badge on the tile.
+// ============================================================================
+const REACT_EMOJIS = ['👍', '❤️', '😂', '🎉', '🔥', '🤔'];
+let _selfHandRaised = false;
+let _reactPopoverEl = null;
+
+function openReactPopover() {
+  if (_reactPopoverEl) return closeReactPopover();
+  _reactPopoverEl = document.createElement('div');
+  _reactPopoverEl.className = 'react-popover';
+  _reactPopoverEl.setAttribute('role', 'menu');
+  _reactPopoverEl.innerHTML = `
+    <button type="button" class="react-hand ${_selfHandRaised ? 'on' : ''}" data-role="hand">
+      ${icon('hand', { size: 18 })}
+      <span>${_selfHandRaised ? 'Lower hand' : 'Raise hand'}</span>
+    </button>
+    <div class="react-row">
+      ${REACT_EMOJIS.map(
+        (e) => `<button type="button" class="react-emoji" data-emoji="${e}">${e}</button>`,
+      ).join('')}
+    </div>
+  `;
+  // Anchor above the React button.
+  const btn = $('react-btn');
+  document.body.appendChild(_reactPopoverEl);
+  const r = btn.getBoundingClientRect();
+  const pw = _reactPopoverEl.offsetWidth;
+  _reactPopoverEl.style.left = Math.max(8, Math.min(window.innerWidth - pw - 8, r.left + r.width / 2 - pw / 2)) + 'px';
+  _reactPopoverEl.style.top = r.top - _reactPopoverEl.offsetHeight - 10 + 'px';
+  btn.setAttribute('aria-expanded', 'true');
+
+  _reactPopoverEl.addEventListener('click', (e) => {
+    const hand = e.target.closest('.react-hand');
+    if (hand) {
+      toggleHand();
+      closeReactPopover();
+      return;
+    }
+    const em = e.target.closest('.react-emoji');
+    if (em) {
+      sendReaction(em.dataset.emoji);
+      closeReactPopover();
+    }
+  });
+  setTimeout(() => {
+    document.addEventListener('click', _reactOutsideClick, { capture: true });
+  }, 0);
+}
+function closeReactPopover() {
+  if (!_reactPopoverEl) return;
+  _reactPopoverEl.remove();
+  _reactPopoverEl = null;
+  $('react-btn')?.setAttribute('aria-expanded', 'false');
+  document.removeEventListener('click', _reactOutsideClick, { capture: true });
+}
+function _reactOutsideClick(e) {
+  if (!_reactPopoverEl) return;
+  if (_reactPopoverEl.contains(e.target)) return;
+  if (e.target.closest?.('#react-btn')) return;
+  closeReactPopover();
+}
+
+function sendReaction(emoji) {
+  if (!ws || ws.readyState !== 1) return;
+  ws.send(JSON.stringify({ type: 'room:reaction', emoji }));
+}
+function toggleHand() {
+  _selfHandRaised = !_selfHandRaised;
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'room:hand', raised: _selfHandRaised }));
+  }
+  // Render locally too so the user sees the badge instantly without waiting
+  // for the server echo.
+  self.handRaised = _selfHandRaised;
+  _lastGridSig = ''; // force re-render with the new state
+  renderParticipantsGrid();
+  syncReactBtn();
+}
+function syncReactBtn() {
+  const btn = $('react-btn');
+  if (!btn) return;
+  btn.classList.toggle('hand-up', _selfHandRaised);
+  btn.setAttribute('aria-pressed', String(_selfHandRaised));
+}
+
+function onRoomReaction({ from, emoji }) {
+  spawnFloatingEmoji(from, emoji);
+  playSound('raise');
+}
+function onRoomHand({ from, raised }) {
+  const peer = peers.get(from);
+  if (peer) {
+    peer.handRaised = !!raised;
+    _lastGridSig = '';
+    renderParticipantsGrid();
+  }
+  if (raised) playSound('raise');
+}
+
+// Spawn an emoji that floats up + fades over the sender's participant tile.
+function spawnFloatingEmoji(peerId, emoji) {
+  const sid = peerId === myId ? 'self' : peerId;
+  const tile = _gridElById.get(sid);
+  if (!tile) return;
+  const span = document.createElement('span');
+  span.className = 'float-emoji';
+  span.textContent = emoji;
+  // Random horizontal jitter so multiple in a row don't stack identically.
+  const jx = Math.floor((Math.random() - 0.5) * 28);
+  span.style.setProperty('--jx', jx + 'px');
+  tile.appendChild(span);
+  // Remove after the animation completes (1400ms).
+  setTimeout(() => span.remove(), 1500);
+}
+
+// ============================================================================
+// CONNECTION-QUALITY TOAST — surface real-time link degradation events.
+//
+// pollStats already computes per-peer RTT; this layer keeps a small rolling
+// baseline and emits a toast when a peer's link degrades sharply. Throttled
+// to one toast per peer per 30 seconds to avoid spam.
+// ============================================================================
+const _qualityState = new Map(); // peerId -> { rttSamples: [], lastToastAt: number, lossPct: 0 }
+const QUAL_RTT_TRIGGER = 200; // ms absolute floor for a toast
+const QUAL_RTT_RATIO = 2.2; // current must be N× the recent baseline
+const QUAL_LOSS_PCT = 5; // %
+const QUAL_THROTTLE_MS = 30_000;
+
+function reportQuality(peerId, peerName, rttMs, lossPct) {
+  let st = _qualityState.get(peerId);
+  if (!st) {
+    st = { rttSamples: [], lastToastAt: 0 };
+    _qualityState.set(peerId, st);
+  }
+  if (typeof rttMs === 'number' && rttMs > 0) {
+    st.rttSamples.push(rttMs);
+    if (st.rttSamples.length > 20) st.rttSamples.shift();
+  }
+  const now = Date.now();
+  if (now - st.lastToastAt < QUAL_THROTTLE_MS) return;
+  const baseline = st.rttSamples.length >= 4
+    ? st.rttSamples.slice(0, -1).reduce((a, b) => a + b, 0) / (st.rttSamples.length - 1)
+    : 0;
+  const rttBad = baseline > 0 && rttMs >= QUAL_RTT_TRIGGER && rttMs >= baseline * QUAL_RTT_RATIO;
+  const lossBad = typeof lossPct === 'number' && lossPct >= QUAL_LOSS_PCT;
+  if (rttBad || lossBad) {
+    st.lastToastAt = now;
+    const what = rttBad
+      ? `RTT spiked to ${Math.round(rttMs)} ms (baseline ${Math.round(baseline)} ms)`
+      : `${lossPct.toFixed(1)}% packet loss`;
+    showToast(`${peerName || peerId.slice(0, 6)}: ${what}`, 4000);
+    playSound('warn');
+  }
+}
+
 function setLat(ms) {
   const el = $('lat-badge'), val = $('lat-val');
   if (ms == null) { el.className = 'lat'; val.textContent = '— ms'; return; }
@@ -2294,6 +2485,8 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp
   });
   //  meeting recorder toggle (record-btn in topbar)
   $('record-btn')?.addEventListener('click', toggleRecording);
+  //  react popover (hand-raise + 6 emoji)
+  $('react-btn')?.addEventListener('click', openReactPopover);
   //  pre-join preview: mic VU + echo test
   startJoinPreview().catch(() => {
     /* mic-denied is fine; the user can still try to join */
