@@ -94,28 +94,33 @@ the WebSocket, their browsers establish a direct P2P
 
 ## Features
 
-| Audio           | Video            | Chat               | UX                             |
-| --------------- | ---------------- | ------------------ | ------------------------------ |
-| Mesh P2P Opus   | Camera 1080p60   | Markdown           | 4 themes                       |
-| Mute / deafen   | Screen + audio   | Reactions emoji    | Keyboard shortcuts             |
-| AEC toggle      | Codec AV1/NVENC  | Mentions `@user`   | Push-to-talk (Space)           |
-| VU meter input  | Per-peer tile    | Edit / delete      | Stats panel `Ctrl+Shift+D`     |
-| Test beep       | Self-tile mirror | Typing indicator   | Audio gate fallback            |
-| Per-peer volume | Self preview     | Incremental render | Reduced motion / high contrast |
+| Audio               | Video                | Chat + room         | UX                              |
+| ------------------- | -------------------- | ------------------- | ------------------------------- |
+| Mesh P2P Opus       | Camera 1080p60       | Markdown chat       | 4 themes (Graphite default)     |
+| Mute / deafen       | Screen + tab audio   | Mentions `@user`    | Keyboard shortcuts              |
+| AEC toggle          | Audio-only share     | Edit / delete msgs  | Push-to-talk (Space)            |
+| Optional noise gate | Codec AV1 / NVENC    | Reactions on msgs   | Notification sounds (sounds.js) |
+| VU meter input      | Per-peer tile        | File transfer P2P   | Pre-join mic test + echo loop   |
+| Test beep           | Grid / Speaker view  | Soundboard per room | Stats panel + 60 s RTT graph    |
+| Per-peer volume     | Click-to-pin speaker | Floating reactions  | Hand-raise + connection-toast   |
+| Local recorder      | Self-tile mirror     | Typing indicator    | PWA install + reduced motion    |
 
 ## Keyboard shortcuts
 
-| Key            | Action              |
-| -------------- | ------------------- |
-| `M`            | Toggle microphone   |
-| `Space` (hold) | Push-to-talk        |
-| `D`            | Deafen (silence in) |
-| `C`            | Toggle camera       |
-| `S`            | Toggle screen share |
-| `T`            | Local test beep     |
-| `Ctrl+Shift+D` | Stats / debug panel |
-| `?`            | Shortcut cheatsheet |
-| `Esc`          | Close panels        |
+| Key            | Action                            |
+| -------------- | --------------------------------- |
+| `M`            | Toggle microphone                 |
+| `Space` (hold) | Push-to-talk                      |
+| `D`            | Deafen (silence incoming audio)   |
+| `C`            | Toggle camera                     |
+| `S`            | Toggle screen share / audio       |
+| `R`            | Open react popover (hand + emoji) |
+| `G`            | Cycle Grid / Speaker view         |
+| `B`            | Open the soundboard drawer        |
+| `T`            | Local test beep                   |
+| `Ctrl+Shift+D` | Stats / debug panel               |
+| `?`            | Shortcut cheatsheet               |
+| `Esc`          | Close panels                      |
 
 ## Accessibility
 
@@ -185,6 +190,58 @@ runtime (the same code path that screen-share uses), then asserting
 zero entries in the client error ring.
 
 ## Changelog
+
+### v1.5.0
+
+- **Soundboard.** Per-room shared soundboard with upload (5 MB cap per file,
+  200 sounds per user, Opus 128 kbps mono recommended), local Test preview,
+  and Play-in-room that broadcasts via WebSocket so every peer fetches the
+  same blob and plays it in sync. The sender's participant tile gets a
+  brief halo for visual attribution. Owner-only delete. New SQLite store
+  (`lib/sound_store.js`) + binary files under `data/sounds/`. Topbar
+  button or the `B` shortcut opens the dedicated drawer.
+
+### v1.4.0
+
+- **Notification sounds** (synthesized via WebAudio, 7 voicings for join,
+  leave, hand-raise, chat msg, mute toggle, push-to-talk on/off, warn).
+  Topbar bell button toggles, preference persisted to localStorage.
+- **Mobile responsive deck.** Below 560 px the topbar scrolls horizontally,
+  secondary labels collapse, participant tiles shrink to 140 px, the
+  chat drawer goes full-screen, the control deck reflows to compact
+  squircles. iOS safe-area insets respected on topbar + deck.
+- **Local meeting recorder.** Mixes own mic + every peer audio + screen
+  share audio via WebAudio destination, bundles camera or screen video,
+  writes WebM via `MediaRecorder`, auto-downloads as
+  `halcyon-<timestamp>.webm`. Topbar Record button pulses red and shows
+  elapsed `MM:SS`.
+- **Pre-join mic preview + 3 s echo loopback test** on the join card.
+  Opt-in (a button, not auto) so it doesn't burn the browser's mic
+  permission prompt before the user even sees the page.
+- **Hand-raise + floating reactions.** New React deck button opens a
+  popover with a hand toggle + 6-emoji quick pick. Reactions float up
+  over the sender's avatar (1.4 s rise + fade). Hand-raise paints a
+  persistent amber badge on the tile. `R` opens the popover.
+- **Connection-quality toast.** Per-peer 20-sample rolling RTT baseline;
+  a single throttled toast (max 1 per peer per 30 s) when the latest
+  sample exceeds 200 ms AND 2.2x baseline, or audio packet loss
+  crosses 5 percent.
+- **Optional noise gate** (`highpass 80 Hz Q 0.7 -> compressor thr -32 dB
+ratio 8:1 attack 8 ms release 200 ms -> 1.05x gain`). Topbar waveform
+  button toggles. Caches the raw mic stream so the toggle never
+  re-prompts for permissions.
+- **Grid / Speaker view toggle** (`G` shortcut). Click any video tile to
+  pin / unpin it as the speaker-view main tile. Auto-pick when nothing
+  pinned: screen-share self -> camera self -> first remote video.
+- **60 s RTT sparkline per peer** in the debug panel (80x18 canvas,
+  colour shifts green to amber to rose at 200 / 350 ms thresholds).
+- **PWA install.** `manifest.webmanifest`, app icon SVG, minimal service
+  worker with network-first strategy + opportunistic cache refresh.
+  Browsers offer "Install Halcyon" once criteria are met.
+- **File transfer over WebRTC DataChannel.** Chat input row Attach
+  button; each peer connection carries a `file` ordered DataChannel;
+  16 KB chunks, backpressure-aware (pauses at 4 MB bufferedAmount);
+  200 MB cap; auto-download on receive. No server involvement.
 
 ### v1.3.0
 
