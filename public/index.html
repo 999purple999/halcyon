@@ -151,6 +151,17 @@
           <span class="ico" data-icon="users"></span>
         </button>
         <button
+          id="soundboard-btn"
+          class="theme-btn"
+          type="button"
+          title="Soundboard (B)"
+          aria-label="Open soundboard"
+          aria-controls="soundboard-drawer"
+          aria-expanded="false"
+        >
+          <span class="ico" data-icon="music"></span>
+        </button>
+        <button
           id="sound-btn"
           class="theme-btn"
           type="button"
@@ -238,6 +249,50 @@
               <span data-icon="link"></span><span>Attach</span>
             </button>
           </div>
+        </div>
+      </aside>
+
+      <!-- Soundboard drawer -->
+      <aside
+        id="soundboard-drawer"
+        class="soundboard-drawer"
+        aria-label="Soundboard"
+        aria-hidden="true"
+      >
+        <header class="soundboard-header">
+          <h3><span data-icon="music"></span>Soundboard</h3>
+          <button
+            id="soundboard-close"
+            class="chat-close"
+            type="button"
+            aria-label="Close soundboard"
+          >
+            <span data-icon="x"></span>
+          </button>
+        </header>
+        <div class="soundboard-upload">
+          <input
+            type="file"
+            id="sound-upload-input"
+            class="sr-only"
+            accept="audio/*"
+            aria-label="Upload a sound file"
+          />
+          <button
+            id="sound-upload-btn"
+            class="sound-upload-btn"
+            type="button"
+            title="Upload an audio file (max 5 MB; Opus 128 kbps recommended)"
+          >
+            <span data-icon="link"></span><span>Upload sound</span>
+          </button>
+          <p class="soundboard-hint">Max 5&nbsp;MB. Opus 128&nbsp;kbps mono recommended.</p>
+        </div>
+        <div id="soundboard-list" class="soundboard-list" role="list"></div>
+        <div class="soundboard-foot">
+          <button id="sound-stop-all" type="button" class="chat-tool-btn">
+            <span data-icon="stop"></span><span>Stop all</span>
+          </button>
         </div>
       </aside>
 

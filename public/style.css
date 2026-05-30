@@ -1574,6 +1574,225 @@ body.ptt-active::after {
 .chat-tool-btn svg {
   color: var(--c-accent);
 }
+
+/* --- Soundboard drawer (mirrors chat-drawer position, distinct accent) ---- */
+.soundboard-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 380px;
+  max-width: 92vw;
+  height: 100vh;
+  z-index: 21;
+  background: var(--c-bg-1);
+  border-left: 1px solid var(--c-line-2);
+  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.3s var(--ease);
+}
+.soundboard-drawer.open {
+  transform: none;
+}
+.soundboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--c-line-1);
+}
+.soundboard-header h3 {
+  margin: 0;
+  font-size: var(--t-lg);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.soundboard-header h3 svg {
+  color: var(--c-accent);
+}
+.soundboard-upload {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--c-line-1);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sound-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--c-line-2);
+  background: var(--c-bg-2);
+  color: var(--c-text-1);
+  font-family: inherit;
+  font-size: var(--t-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--m-fast) var(--ease),
+    border-color var(--m-fast) var(--ease);
+}
+.sound-upload-btn:hover {
+  background: var(--c-bg-3);
+  border-color: var(--c-accent);
+}
+.sound-upload-btn svg {
+  color: var(--c-accent);
+}
+.soundboard-hint {
+  margin: 0;
+  font-size: var(--t-xs);
+  color: var(--c-text-3);
+  text-align: center;
+}
+.soundboard-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-line-2) transparent;
+}
+.soundboard-list::-webkit-scrollbar {
+  width: 8px;
+}
+.soundboard-list::-webkit-scrollbar-thumb {
+  background: var(--c-line-2);
+  border-radius: 4px;
+}
+.soundboard-empty {
+  margin: 24px 8px;
+  text-align: center;
+  color: var(--c-text-3);
+  font-size: var(--t-sm);
+}
+.sound-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--c-line-1);
+  background: var(--c-bg-2);
+  transition:
+    border-color var(--m-fast) var(--ease),
+    background var(--m-fast) var(--ease);
+}
+.sound-item.mine {
+  border-color: rgba(79, 209, 161, 0.3);
+}
+.sound-item.playing {
+  border-color: var(--c-accent);
+  background: var(--c-accent-weak);
+}
+.sound-item-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sound-item-name {
+  font-size: var(--t-md);
+  font-weight: 600;
+  color: var(--c-text-1);
+  letter-spacing: -0.005em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sound-item-meta {
+  font-size: var(--t-xs);
+  color: var(--c-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sound-item-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.sound-item-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 9px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--c-line-2);
+  background: var(--c-bg-3);
+  color: var(--c-text-2);
+  font-family: inherit;
+  font-size: var(--t-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--m-fast) var(--ease),
+    border-color var(--m-fast) var(--ease),
+    color var(--m-fast) var(--ease);
+}
+.sound-item-actions button:hover {
+  background: var(--c-bg-4);
+  border-color: var(--c-accent);
+  color: var(--c-text-1);
+}
+.sound-item-actions .sound-play:hover {
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+}
+.sound-item-actions .sound-del:hover {
+  border-color: var(--c-danger);
+  color: var(--c-danger);
+}
+.sound-item-actions button svg {
+  flex-shrink: 0;
+}
+.soundboard-foot {
+  padding: 10px 14px;
+  border-top: 1px solid var(--c-line-1);
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Brief highlight on the participant tile when its owner triggers a sound */
+.participant.sound-burst {
+  border-color: var(--c-accent);
+  box-shadow:
+    0 0 0 3px var(--c-accent-ring),
+    var(--e-1);
+  animation: sound-burst 0.8s ease-out;
+}
+@keyframes sound-burst {
+  0% {
+    box-shadow: 0 0 0 0 var(--c-accent);
+  }
+  60% {
+    box-shadow: 0 0 0 12px rgba(79, 209, 161, 0);
+  }
+  100% {
+    box-shadow:
+      0 0 0 3px var(--c-accent-ring),
+      var(--e-1);
+  }
+}
+
+@media (max-width: 560px) {
+  .soundboard-drawer {
+    width: 100vw;
+    max-width: 100vw;
+    border-left: none;
+  }
+}
 .chat-input {
   width: 100%;
   resize: none;

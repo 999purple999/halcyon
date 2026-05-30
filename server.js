@@ -19,6 +19,7 @@ import { WebSocketServer } from 'ws';
 import selfsigned from 'selfsigned';
 import { SettingsStore, isValidUserId, defaultDbPath } from './lib/settings_store.js';
 import { ChatStore } from './lib/chat_store.js';
+import { SoundStore, SOUND_MAX_BYTES } from './lib/sound_store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT ? Number(process.env.PORT) : 8443;
@@ -262,6 +263,7 @@ function handleReady(res) {
 // ---------------------------------------------------------------------------
 const settingsStore = new SettingsStore(defaultDbPath());
 const chatStore = new ChatStore(defaultDbPath());
+const soundStore = new SoundStore(defaultDbPath(), path.join(__dirname, 'data', 'sounds'));
 const DEFAULT_ROOM = 'main';
 
 function parseQuery(req) {
@@ -336,6 +338,97 @@ async function handleSettingsDelete(req, res) {
   return sendJSON(res, 200, { deleted });
 }
 
+// ---------------------------------------------------------------------------
+//  Soundboard REST endpoints.
+//
+//   GET    /api/sounds                       -> 200 { sounds: [...] }
+//   POST   /api/sounds                       -> 201 { sound: {...} }
+//          headers: X-Sound-Owner-Id, X-Sound-Owner-Name, X-Sound-Name,
+//                   Content-Type (= sound mime), Content-Length
+//          body:    raw audio bytes
+//   GET    /api/sounds/<id>/file             -> 200 binary
+//   DELETE /api/sounds/<id>?userId=<uuid>    -> 200 { deleted: bool }
+//
+// All responses JSON except the binary file. Upload is intentionally
+// header-based instead of multipart so we don't need a multipart parser
+// for this single-file-per-request use case.
+// ---------------------------------------------------------------------------
+function readRawBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let len = 0;
+    req.on('data', (c) => {
+      len += c.length;
+      if (len > maxBytes) {
+        req.destroy();
+        reject(new Error('body_too_large'));
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+async function handleSoundsList(_req, res) {
+  return sendJSON(res, 200, { sounds: soundStore.list() });
+}
+
+async function handleSoundsUpload(req, res) {
+  const ownerId = String(req.headers['x-sound-owner-id'] || '');
+  const ownerName = String(req.headers['x-sound-owner-name'] || 'unknown');
+  const name = String(req.headers['x-sound-name'] || 'untitled');
+  const mime = String(req.headers['content-type'] || 'application/octet-stream');
+  if (!isValidUserId(ownerId)) return sendJSON(res, 400, { error: 'invalid_owner_id' });
+  let buffer;
+  try {
+    buffer = await readRawBody(req, SOUND_MAX_BYTES + 1024);
+  } catch (e) {
+    return sendJSON(res, 413, { error: e.message });
+  }
+  if (!buffer.length) return sendJSON(res, 400, { error: 'empty_body' });
+  try {
+    const sound = soundStore.upload({
+      name: decodeURIComponent(name),
+      mime,
+      ownerId,
+      ownerName: decodeURIComponent(ownerName),
+      buffer,
+    });
+    return sendJSON(res, 201, { sound });
+  } catch (e) {
+    log.warn('[sounds] upload rejected', e.message);
+    return sendJSON(res, 400, { error: e.message });
+  }
+}
+
+async function handleSoundsFile(req, res, id) {
+  const meta = soundStore.get(id);
+  if (!meta || !soundStore.exists(id)) {
+    res.writeHead(404);
+    return res.end();
+  }
+  const size = soundStore.diskSize(id);
+  res.writeHead(200, {
+    'Content-Type': meta.mime || 'application/octet-stream',
+    'Content-Length': size,
+    'Cache-Control': 'public, max-age=600',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  if (req.method === 'HEAD') return res.end();
+  const stream = soundStore.readStream(id);
+  stream.on('error', () => res.end());
+  stream.pipe(res);
+}
+
+async function handleSoundsDelete(req, res, id) {
+  const { userId } = parseQuery(req);
+  if (!isValidUserId(userId)) return sendJSON(res, 400, { error: 'invalid_user_id' });
+  const deleted = soundStore.delete(id, userId);
+  return sendJSON(res, 200, { deleted });
+}
+
 function requestHandler(req, res) {
   const url = (req.url || '/').split('?')[0];
   if (url === '/healthz') return handleHealth(res);
@@ -345,6 +438,30 @@ function requestHandler(req, res) {
     if (req.method === 'PUT' || req.method === 'POST') return handleSettingsPut(req, res);
     if (req.method === 'DELETE') return handleSettingsDelete(req, res);
     res.writeHead(405, { Allow: 'GET, PUT, POST, DELETE' });
+    return res.end();
+  }
+  if (url === '/api/sounds') {
+    if (req.method === 'GET') return handleSoundsList(req, res);
+    if (req.method === 'POST') return handleSoundsUpload(req, res);
+    res.writeHead(405, { Allow: 'GET, POST' });
+    return res.end();
+  }
+  // /api/sounds/<id>/file  OR  /api/sounds/<id>
+  if (url.startsWith('/api/sounds/')) {
+    const rest = url.slice('/api/sounds/'.length);
+    const isFile = rest.endsWith('/file');
+    const id = isFile ? rest.slice(0, -'/file'.length) : rest;
+    if (!id) {
+      res.writeHead(400);
+      return res.end();
+    }
+    if (isFile && (req.method === 'GET' || req.method === 'HEAD')) {
+      return handleSoundsFile(req, res, id);
+    }
+    if (!isFile && req.method === 'DELETE') {
+      return handleSoundsDelete(req, res, id);
+    }
+    res.writeHead(405, { Allow: isFile ? 'GET, HEAD' : 'DELETE' });
     return res.end();
   }
   return serveStatic(req, res);
@@ -617,6 +734,26 @@ wss.on('connection', (ws) => {
         if (!peer) break;
         peer.handRaised = !!msg.raised;
         broadcast({ type: 'room:hand', from: id, raised: peer.handRaised }, null, id);
+        break;
+      }
+      // Soundboard play. Validates the sound exists server-side before fan-out
+      // so a stale id doesn't make peers hit a 404. Each receiver fetches the
+      // file from /api/sounds/<id>/file and plays it locally.
+      case 'room:sound': {
+        const peer = peers.get(id);
+        if (!peer) break;
+        const soundId = String(msg.soundId || '');
+        if (!soundId) break;
+        const meta = soundStore.get(soundId);
+        if (!meta) {
+          send(ws, { type: 'room:sound:error', reason: 'not_found', soundId });
+          break;
+        }
+        broadcast(
+          { type: 'room:sound', soundId, soundName: meta.name, from: id, fromName: peer.name },
+          null,
+          id,
+        );
         break;
       }
       default:

@@ -16,6 +16,14 @@ import {
   isRecording,
   recordingElapsed,
 } from './recorder.js';
+import {
+  listSounds,
+  uploadSound,
+  deleteSound,
+  playLocal as playSoundboardLocal,
+  stopAll as stopAllSoundboard,
+  humanBytesShort,
+} from './soundboard.js';
 
 // ---------- LOGGER (vedi raffinamento  §1.Step6) ----------
 (function setupLogger() {
@@ -610,6 +618,12 @@ function openSocket() {
       //  room signals: floating reactions + hand-raise
       case 'room:reaction': onRoomReaction(msg); break;
       case 'room:hand': onRoomHand(msg); break;
+      //  soundboard: peer triggered a sound, fetch + play locally
+      case 'room:sound': onRoomSound(msg); break;
+      case 'room:sound:error':
+        __ar.log.warn('[soundboard] play rejected:', msg.reason, msg.soundId);
+        showToast('Sound not found on server');
+        break;
     }
   });
 }
@@ -1954,6 +1968,9 @@ document.addEventListener('keydown', (e) => {
     case 'g':
       cycleViewMode();
       break;
+    case 'b':
+      toggleSoundboard();
+      break;
     case '?':
       toggleShortcutsCheatsheet();
       break;
@@ -1964,6 +1981,7 @@ document.addEventListener('keydown', (e) => {
       hideShortcutsCheatsheet();
       closeShareMenu?.();
       closeReactPopover?.();
+      closeSoundboard?.();
       break;
     case ' ':
       // Push-to-talk: se mic muto, attiviamo finche' tenuto premuto
@@ -2798,6 +2816,162 @@ function humanBytes(n) {
   return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
 }
 
+// ============================================================================
+// SOUNDBOARD UI — drawer + upload + per-item Test / Play-in-room / Delete
+//
+// Server stores sound files under data/sounds/ + metadata in SQLite. The
+// client lists them in a side drawer, lets the local user upload new ones
+// (Opus 128 kbps mono recommended), preview each via Test (plays only in
+// the local AudioContext), and broadcast a play to the whole room via the
+// WS message room:sound. Receivers fetch /api/sounds/<id>/file and play.
+// ============================================================================
+let _soundboardOpen = false;
+let _soundboardList = []; // cached metadata
+
+async function openSoundboard() {
+  _soundboardOpen = true;
+  const d = $('soundboard-drawer');
+  d?.classList.add('open');
+  d?.setAttribute('aria-hidden', 'false');
+  $('soundboard-btn')?.setAttribute('aria-expanded', 'true');
+  await refreshSoundboard();
+}
+function closeSoundboard() {
+  _soundboardOpen = false;
+  const d = $('soundboard-drawer');
+  d?.classList.remove('open');
+  d?.setAttribute('aria-hidden', 'true');
+  $('soundboard-btn')?.setAttribute('aria-expanded', 'false');
+}
+function toggleSoundboard() {
+  _soundboardOpen ? closeSoundboard() : openSoundboard();
+}
+
+async function refreshSoundboard() {
+  const list = $('soundboard-list');
+  if (!list) return;
+  try {
+    _soundboardList = await listSounds();
+  } catch (e) {
+    __ar.log.warn('[soundboard] list failed', e);
+    list.innerHTML = `<p class="soundboard-empty">Could not load sounds.</p>`;
+    return;
+  }
+  if (!_soundboardList.length) {
+    list.innerHTML = `<p class="soundboard-empty">No sounds yet. Upload one to get started.</p>`;
+    return;
+  }
+  list.innerHTML = _soundboardList
+    .map((s) => {
+      const mine = s.ownerId === profile.userId;
+      return `<div class="sound-item${mine ? ' mine' : ''}" role="listitem" data-id="${escapeHtml(s.id)}">
+        <div class="sound-item-text">
+          <span class="sound-item-name">${escapeHtml(s.name)}</span>
+          <span class="sound-item-meta">${escapeHtml(s.ownerName)} · ${humanBytesShort(s.size)}</span>
+        </div>
+        <div class="sound-item-actions">
+          <button type="button" class="sound-test" title="Play only in your headphones">${icon('headphones', { size: 16 })}<span>Test</span></button>
+          <button type="button" class="sound-play" title="Play for everyone in the room">${icon('music', { size: 16 })}<span>Play</span></button>
+          ${mine ? `<button type="button" class="sound-del" title="Delete (yours only)">${icon('x', { size: 16 })}</button>` : ''}
+        </div>
+      </div>`;
+    })
+    .join('');
+}
+
+function bindSoundboardUi() {
+  $('soundboard-btn')?.addEventListener('click', toggleSoundboard);
+  $('soundboard-close')?.addEventListener('click', closeSoundboard);
+  $('sound-upload-btn')?.addEventListener('click', () => $('sound-upload-input')?.click());
+  $('sound-upload-input')?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const sound = await uploadSound({
+        file,
+        name: file.name.replace(/\.[^.]+$/, ''),
+        ownerId: profile.userId,
+        ownerName: myName || profile.data.nickname || 'unknown',
+      });
+      showToast(`Uploaded: ${sound.name}`, 2500);
+      playSound('tick');
+      refreshSoundboard();
+    } catch (err) {
+      const msg = err?.message || 'upload failed';
+      showToast(
+        msg.includes('too_large')
+          ? 'File too large (max 5 MB)'
+          : msg.includes('quota_exceeded')
+            ? 'Too many sounds (max 200 per user)'
+            : 'Upload failed: ' + msg,
+        3500,
+      );
+    }
+  });
+  $('sound-stop-all')?.addEventListener('click', () => {
+    stopAllSoundboard();
+    showToast('Stopped all sounds', 1500);
+  });
+  $('soundboard-list')?.addEventListener('click', async (e) => {
+    const item = e.target.closest('.sound-item');
+    if (!item) return;
+    const id = item.dataset.id;
+    if (!id) return;
+    if (e.target.closest('.sound-test')) {
+      try {
+        item.classList.add('playing');
+        await playSoundboardLocal(id, { onEnded: () => item.classList.remove('playing') });
+      } catch (err) {
+        item.classList.remove('playing');
+        showToast('Test failed: ' + (err?.message || err?.name), 3000);
+      }
+    } else if (e.target.closest('.sound-play')) {
+      // Broadcast first so peers start fetching in parallel with our local play.
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: 'room:sound', soundId: id }));
+      }
+      try {
+        item.classList.add('playing');
+        await playSoundboardLocal(id, { onEnded: () => item.classList.remove('playing') });
+      } catch {
+        item.classList.remove('playing');
+      }
+    } else if (e.target.closest('.sound-del')) {
+      try {
+        const ok = await deleteSound(id, profile.userId);
+        if (ok) {
+          refreshSoundboard();
+          showToast('Sound deleted', 1500);
+        } else {
+          showToast('Delete failed (not yours?)', 2000);
+        }
+      } catch (err) {
+        showToast('Delete failed: ' + (err?.message || err?.name), 3000);
+      }
+    }
+  });
+}
+
+// Remote-trigger from a peer. Fetches + plays the file in this client's
+// AudioContext, with a brief speaking-style highlight on the sender's tile
+// for visual attribution.
+async function onRoomSound({ soundId, soundName, from, fromName }) {
+  showToast(`${fromName || 'Someone'}: ${soundName || 'sound'}`, 2000);
+  try {
+    await playSoundboardLocal(soundId);
+  } catch (e) {
+    __ar.log.warn('[soundboard] remote play failed', e);
+  }
+  // Brief visual cue on the sender tile.
+  const sid = from === myId ? 'self' : from;
+  const tile = _gridElById.get(sid);
+  if (tile) {
+    tile.classList.add('sound-burst');
+    setTimeout(() => tile.classList.remove('sound-burst'), 800);
+  }
+}
+
 function setLat(ms) {
   const el = $('lat-badge'), val = $('lat-val');
   if (ms == null) { el.className = 'lat'; val.textContent = '— ms'; return; }
@@ -2882,6 +3056,8 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp
       __ar.log.warn('[pwa] sw register failed', err?.message);
     });
   }
+  //  soundboard drawer + upload + play
+  bindSoundboardUi();
   //  pre-join preview: opt-in only. The echo test button starts the preview
   //  on demand. Auto-starting it on boot triggered a getUserMedia prompt before
   //  the user even saw the page, and a denied prompt got cached for the whole
