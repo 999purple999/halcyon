@@ -748,8 +748,12 @@ async function maximizeBitrate(pc) {
   // Defensive: sender.getParameters() may return { encodings: [] } (empty array)
   // on some negotiation paths, in which case p.encodings[0] is undefined and
   // a naive assignment throws TypeError. Always ensure at least one encoding.
+  //
+  // Senders flagged with _musicCap are tuned by tuneAudioForMusic at the music-
+  // specific 320 kbps cap, so the negotiation loop skips them.
   for (const sender of pc.getSenders()) {
     if (!sender.track || sender.track.kind !== 'audio') continue;
+    if (sender._musicCap) continue;
     try {
       const p = sender.getParameters();
       if (!p.encodings || p.encodings.length === 0) p.encodings = [{}];
@@ -758,6 +762,24 @@ async function maximizeBitrate(pc) {
     } catch (e) {
       __ar.log.debug(`maximizeBitrate sender skip`, e?.name || e);
     }
+  }
+}
+
+// Music-share sender tune. 320 kbps stereo Opus is the practical sweet spot
+// (transparent for most listeners, fits in a typical LAN budget). Flags the
+// sender so the global maximizeBitrate skips it on later negotiation passes.
+async function tuneAudioForMusic(sender, label) {
+  try {
+    const p = sender.getParameters();
+    if (!p.encodings || p.encodings.length === 0) p.encodings = [{}];
+    p.encodings[0].maxBitrate = 320000;
+    p.encodings[0].priority = 'high';
+    p.encodings[0].networkPriority = 'high';
+    sender._musicCap = true;
+    await sender.setParameters(p);
+    __ar.log.info(`[music] ${label} maxBitrate=320kbps stereo`);
+  } catch (e) {
+    __ar.log.warn(`[music] ${label} setParameters`, e);
   }
 }
 function attachRemoteAudio(id, stream) {
@@ -1386,10 +1408,15 @@ function stopScreenShare() {
   // Rimuovi sender dai pc ( tracking diretto del pc nel sender entry)
   for (const { sender, pc } of screenSenders) {
     if (!pc) continue;
-    try { pc.removeTrack(sender); } catch (e) { __ar.log.warn('[screen] removeTrack', e); }
+    try {
+      pc.removeTrack(sender);
+    } catch (e) {
+      __ar.log.warn('[screen] removeTrack', e);
+    }
   }
   screenSenders = [];
   document.querySelector('.video-tile-screen-self')?.remove();
+  document.querySelector('.music-tile-self')?.remove();
   refreshVideoGridVisibility();
   updateScreenShareUi(false);
   __ar.log.info('[screen] sharing fermato');
@@ -1417,13 +1444,160 @@ function ensureSelfScreenTile(stream) {
   refreshVideoGridVisibility();
 }
 
-function updateScreenShareUi(active) {
+function updateScreenShareUi(active, mode) {
+  // mode: 'screen' | 'music' | undefined (idle)
   const btn = $('screen-share-btn');
   if (!btn) return;
   btn.classList.toggle('active', active);
+  btn.classList.toggle('music', active && mode === 'music');
   btn.setAttribute('aria-pressed', String(active));
-  btn.querySelector('.ico').innerHTML = icon(active ? 'stop' : 'monitor', { size: 20 });
-  btn.title = active ? 'Stop sharing (S)' : 'Share screen (S)';
+  const iconName = active ? 'stop' : 'monitor';
+  btn.querySelector('.ico').innerHTML = icon(iconName, { size: 20 });
+  btn.title = active
+    ? mode === 'music'
+      ? 'Stop audio share (S)'
+      : 'Stop sharing (S)'
+    : 'Share screen or audio (S)';
+}
+
+// ============================================================================
+// MUSIC SHARE — getDisplayMedia audio-only at 320 kbps stereo
+//
+// Why this exists: getDisplayMedia by spec REQUIRES a video constraint, you
+// cannot ask for audio-only directly. The workaround is to ask for the smallest
+// possible video stream, then discard the video track immediately and only
+// addTrack the audio. The picker still shows tab/window/screen choices; the
+// user picks a Chrome tab that has audio (a music site, a YouTube video, etc).
+//
+// Quality target: 320 kbps stereo Opus. The SDP fmtp from tuneOpus already
+// negotiates stereo + maxaveragebitrate=510000 (session-wide setting), and
+// tuneAudioForMusic clamps the per-sender encoding to 320 kbps so the bitrate
+// stays predictable even when the audio track also benefits from the higher
+// SDP cap.
+// ============================================================================
+async function startMusicShare() {
+  if (screenStream) return stopScreenShare(); // already sharing something
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      // Video constraint is mandatory; ask for the cheapest possible stub.
+      video: { width: { ideal: 1 }, height: { ideal: 1 }, frameRate: { ideal: 1 } },
+      audio: {
+        autoGainControl: false,
+        echoCancellation: false,
+        noiseSuppression: false,
+      },
+    });
+  } catch (e) {
+    if (e.name === 'NotAllowedError') {
+      __ar.log.info('[music] picker cancelled by user');
+      return;
+    }
+    __ar.log.error('[music] getDisplayMedia failed', e.name, e.message);
+    showToast(`Audio share failed: ${e.name}`);
+    return;
+  }
+  const audioTrack = stream.getAudioTracks()[0];
+  // Discard the mandatory video track. We never send it.
+  for (const v of stream.getVideoTracks()) v.stop();
+  if (!audioTrack) {
+    showToast('Audio share failed. This source has no audio. Try a Chrome tab.');
+    stream.getTracks().forEach((t) => t.stop());
+    return;
+  }
+  __ar.log.info(`[music] acquired audio, sampleRate=${audioTrack.getSettings?.().sampleRate || '?'}`);
+  audioTrack.addEventListener('ended', () => stopScreenShare());
+
+  screenStream = stream;
+  const targets = [...peers.values()]
+    .filter((p) => p.pc)
+    .map((p) => ({ pc: p.pc, peerId: p.id }));
+  for (const { pc, peerId } of targets) {
+    try {
+      const asender = pc.addTrack(audioTrack, stream);
+      screenSenders.push({ peerId, sender: asender, pc, kind: 'audio' });
+      await tuneAudioForMusic(asender, `music→${peerId}`);
+    } catch (e) {
+      __ar.log.warn('[music] addTrack failed peer=' + peerId, e);
+    }
+  }
+  ensureSelfMusicTile();
+  updateScreenShareUi(true, 'music');
+  announce('Sharing tab audio at 320 kbps');
+  __ar.log.info(`[music] sharing started, peers=${targets.length}`);
+}
+
+// Compact tile shown in the video-grid area while audio-only is being shared.
+// No <video> element since there is no video; only an icon and a label so the
+// sharer has a visible reminder that the share is live.
+function ensureSelfMusicTile() {
+  const grid = $('video-grid');
+  if (!grid) return;
+  if (document.querySelector('.music-tile-self')) return;
+  const tile = document.createElement('div');
+  tile.className = 'video-tile music-tile-self';
+  tile.innerHTML =
+    `<div class="music-tile-body">${icon('music', { size: 24 })}` +
+    `<div class="music-tile-text"><span class="music-tile-title">Sharing audio</span>` +
+    `<span class="music-tile-sub">320 kbps stereo</span></div></div>`;
+  grid.appendChild(tile);
+  refreshVideoGridVisibility();
+}
+
+// Share-mode picker. Two options: full screen + audio, or audio only.
+// Centered card, click outside or Esc closes it. Mirrors the cheatsheet
+// pattern so users don't have to learn a new modal grammar.
+let shareMenuEl = null;
+function openShareMenu() {
+  if (shareMenuEl) return closeShareMenu();
+  shareMenuEl = document.createElement('div');
+  shareMenuEl.className = 'share-menu';
+  shareMenuEl.setAttribute('role', 'menu');
+  shareMenuEl.innerHTML = `
+    <h3>Choose what to share</h3>
+    <button class="share-option" data-mode="screen" role="menuitem" type="button">
+      <span class="share-option-icon">${icon('monitor', { size: 22 })}</span>
+      <span class="share-option-text">
+        <span class="share-option-title">Screen and audio</span>
+        <span class="share-option-sub">A tab, a window, or the full desktop.</span>
+      </span>
+    </button>
+    <button class="share-option" data-mode="music" role="menuitem" type="button">
+      <span class="share-option-icon">${icon('music', { size: 22 })}</span>
+      <span class="share-option-text">
+        <span class="share-option-title">Audio only</span>
+        <span class="share-option-sub">Stream tab audio at 320 kbps stereo. No video.</span>
+      </span>
+    </button>
+    <p class="share-menu-foot">Esc to close.</p>
+  `;
+  document.body.appendChild(shareMenuEl);
+  shareMenuEl.addEventListener('click', (e) => {
+    const opt = e.target.closest('.share-option');
+    if (!opt) return;
+    const mode = opt.dataset.mode;
+    closeShareMenu();
+    if (mode === 'screen') startScreenShare();
+    else if (mode === 'music') startMusicShare();
+  });
+  // Outside-click close. Use a microtask so the originating click doesn't
+  // immediately close the menu we just opened.
+  setTimeout(() => {
+    document.addEventListener('click', _shareMenuOutsideClick, { capture: true });
+  }, 0);
+  shareMenuEl.querySelector('.share-option')?.focus();
+}
+function closeShareMenu() {
+  if (!shareMenuEl) return;
+  shareMenuEl.remove();
+  shareMenuEl = null;
+  document.removeEventListener('click', _shareMenuOutsideClick, { capture: true });
+}
+function _shareMenuOutsideClick(e) {
+  if (!shareMenuEl) return;
+  if (shareMenuEl.contains(e.target)) return;
+  if (e.target.closest?.('#screen-share-btn')) return; // the toggle handles itself
+  closeShareMenu();
 }
 
 $('leave-btn').addEventListener('click', () => {
@@ -1557,6 +1731,7 @@ document.addEventListener('keydown', (e) => {
       closePopover?.();
       closeStatsPanel?.();
       hideShortcutsCheatsheet();
+      closeShareMenu?.();
       break;
     case ' ':
       // Push-to-talk: se mic muto, attiviamo finche' tenuto premuto
@@ -2076,10 +2251,11 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp
   $('aec-toggle')?.addEventListener('click', () => setTimeout(saveProfile, 0));
   //  chat drawer
   bindChatUi();
-  //  screen share toggle
+  //  screen share toggle: when sharing -> stop, when idle -> show the share
+  //  picker (screen+audio vs audio-only at 320 kbps).
   $('screen-share-btn')?.addEventListener('click', () => {
     if (screenStream) stopScreenShare();
-    else startScreenShare();
+    else openShareMenu();
   });
   //  stats panel close button
   $('stats-close')?.addEventListener('click', closeStatsPanel);

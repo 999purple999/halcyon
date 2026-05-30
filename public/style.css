@@ -1558,6 +1558,154 @@ body.ptt-active::after {
   box-shadow: 0 0 0 3px var(--c-accent-ring);
 }
 
+/* --- Share-mode picker (screen+audio vs audio-only) ----------------------- */
+.share-menu {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 65;
+  background: var(--c-bg-2);
+  border: 1px solid var(--c-line-2);
+  border-radius: var(--r-lg);
+  padding: 22px 22px 16px;
+  min-width: 380px;
+  max-width: 92vw;
+  box-shadow: var(--e-3);
+  animation: pop-in 0.22s var(--ease);
+}
+.share-menu h3 {
+  margin: 0 0 16px;
+  font-size: var(--t-lg);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--c-text-1);
+}
+.share-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  margin: 0 0 8px;
+  background: var(--c-bg-3);
+  border: 1px solid var(--c-line-2);
+  border-radius: var(--r-md);
+  color: var(--c-text-1);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition:
+    background var(--m-fast) var(--ease),
+    border-color var(--m-fast) var(--ease),
+    transform var(--m-fast) var(--ease);
+}
+.share-option:hover {
+  background: var(--c-bg-4);
+  border-color: var(--c-accent);
+  transform: translateY(-1px);
+}
+.share-option:focus-visible {
+  border-color: var(--c-accent);
+}
+.share-option-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--r-md);
+  background: var(--c-bg-4);
+  color: var(--c-accent);
+  flex-shrink: 0;
+}
+.share-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.share-option-title {
+  font-size: var(--t-md);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--c-text-1);
+}
+.share-option-sub {
+  font-size: var(--t-xs);
+  color: var(--c-text-3);
+  line-height: 1.45;
+}
+.share-menu-foot {
+  margin: 12px 0 0;
+  font-size: var(--t-xs);
+  color: var(--c-text-3);
+  text-align: right;
+}
+
+/* When the screen-share button is in audio-only mode, tint it with the music
+   palette (info blue keeps it distinguishable from the camera-on info treatment
+   used elsewhere by reusing the same hue but giving the button the .music
+   modifier class, which CSS picks up below). */
+#screen-share-btn.active.music {
+  background: var(--c-accent-weak);
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+  box-shadow: 0 0 0 4px var(--c-accent-ring);
+}
+
+/* Self music tile: shown in the video-grid area while audio-only is being
+   shared. No <video>, just an icon + label so the sharer has a visible cue. */
+.music-tile-self {
+  width: 280px;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, var(--c-accent-weak), var(--c-bg-2));
+  border-color: rgba(79, 209, 161, 0.45);
+  box-shadow:
+    0 0 0 2px var(--c-accent-ring),
+    var(--e-2);
+  cursor: default;
+}
+.music-tile-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  color: var(--c-text-1);
+}
+.music-tile-body > svg:first-child {
+  color: var(--c-accent);
+  flex-shrink: 0;
+}
+.music-tile-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.music-tile-title {
+  font-size: var(--t-md);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+.music-tile-sub {
+  font-size: var(--t-xs);
+  color: var(--c-text-3);
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 720px) {
+  .music-tile-self {
+    width: 220px;
+    height: 70px;
+  }
+  .music-tile-body {
+    gap: 10px;
+    padding: 0 12px;
+  }
+}
+
 /* --- Audio gate overlay --------------------------------------------------- */
 .audio-gate {
   position: fixed;

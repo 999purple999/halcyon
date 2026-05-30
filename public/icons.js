@@ -64,6 +64,9 @@ const PATHS = {
   zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
   dot: '<circle cx="12" cy="12" r="4" fill="currentColor" stroke="none"/>',
   more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+  waveform:
+    '<line x1="4" y1="12" x2="4" y2="12"/><line x1="8" y1="9" x2="8" y2="15"/><line x1="12" y1="5" x2="12" y2="19"/><line x1="16" y1="8" x2="16" y2="16"/><line x1="20" y1="11" x2="20" y2="13"/>',
 };
 
 /**
