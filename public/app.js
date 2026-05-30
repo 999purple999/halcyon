@@ -305,9 +305,19 @@ async function acquireStream(deviceId) {
   return navigator.mediaDevices.getUserMedia({ audio: micConstraints(deviceId), video: false });
 }
 
-// Sostituisce lo stream locale (cambio mic o toggle AEC) senza rinegoziare
-async function replaceLocalStream(newStream) {
-  const newTrack = newStream.getAudioTracks()[0];
+// Sostituisce lo stream locale (cambio mic o toggle AEC) senza rinegoziare.
+//
+// When the noise gate is on, the raw mic stream is piped through a WebAudio
+// chain (low-cut biquad -> compressor -> output) and the OUTPUT stream is
+// what goes to peers. When the gate is off the raw stream goes through
+// directly. The caller passes the raw stream from getUserMedia; this
+// function transparently decides which one to publish.
+async function replaceLocalStream(newRawStream) {
+  // Build the processed stream once. Always keep a handle to the raw stream
+  // so toggleGate can flip without re-prompting for permissions.
+  _rawMicStream = newRawStream;
+  const publishedStream = gateOn ? buildGatedStream(newRawStream) : newRawStream;
+  const newTrack = publishedStream.getAudioTracks()[0];
   newTrack.enabled = micEnabled;
   for (const peer of peers.values()) {
     if (!peer.pc) continue;
@@ -320,9 +330,86 @@ async function replaceLocalStream(newStream) {
       }
     }
   }
-  localStream.getTracks().forEach((t) => t.stop());
-  localStream = newStream;
+  // Stop the previous published stream (raw or gated) before reassigning.
+  if (localStream && localStream !== newRawStream) {
+    localStream.getTracks().forEach((t) => t.stop());
+  }
+  destroyGateChain();
+  if (gateOn) _gateChain = _pendingGateChain; // moved to live ref
+  _pendingGateChain = null;
+  localStream = publishedStream;
   setupSelfAnalyser();
+}
+
+// =========================================================================
+// NOISE GATE (low-cut + dynamics compressor + gain) — WebAudio chain.
+//
+// Off by default. When the user toggles it on, the raw mic stream is piped
+// through:
+//   source -> highpass(80Hz, Q=0.7) -> compressor(thr -32dB, ratio 8:1,
+//             knee 12dB, attack 8ms, release 200ms) -> gain(1.05) -> dest
+// The destination's MediaStream is what goes to peers. Tuning aims at a
+// "podcast desk" sound: rumble killed, persistent room noise pulled down,
+// voice transients preserved.
+// =========================================================================
+let gateOn = false;
+let _rawMicStream = null;
+let _gateChain = null; // { ctx, src, hp, comp, gain, dest }
+let _pendingGateChain = null; // built but not yet committed during swap
+
+function buildGatedStream(rawStream) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = ctx.createMediaStreamSource(rawStream);
+  const hp = ctx.createBiquadFilter();
+  hp.type = 'highpass';
+  hp.frequency.value = 80;
+  hp.Q.value = 0.707;
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -32;
+  comp.knee.value = 12;
+  comp.ratio.value = 8;
+  comp.attack.value = 0.008;
+  comp.release.value = 0.2;
+  const gain = ctx.createGain();
+  gain.gain.value = 1.05;
+  const dest = ctx.createMediaStreamDestination();
+  src.connect(hp).connect(comp).connect(gain).connect(dest);
+  _pendingGateChain = { ctx, src, hp, comp, gain, dest };
+  return dest.stream;
+}
+
+function destroyGateChain() {
+  if (!_gateChain) return;
+  try {
+    _gateChain.src.disconnect();
+    _gateChain.hp.disconnect();
+    _gateChain.comp.disconnect();
+    _gateChain.gain.disconnect();
+  } catch {
+    /* fine */
+  }
+  _gateChain.ctx.close().catch(() => {});
+  _gateChain = null;
+}
+
+async function toggleGate() {
+  gateOn = !gateOn;
+  syncGateBtn();
+  if (!_rawMicStream) return;
+  // Rebuild the published stream from the cached raw stream — no re-prompt.
+  await replaceLocalStream(_rawMicStream);
+  announce(gateOn ? 'Noise gate engaged' : 'Noise gate disengaged');
+  playSound('tick');
+}
+
+function syncGateBtn() {
+  const btn = $('gate-btn');
+  if (!btn) return;
+  btn.classList.toggle('on', gateOn);
+  btn.setAttribute('aria-pressed', String(gateOn));
+  btn.title = gateOn
+    ? 'Noise gate engaged (low-cut + compressor). Click to disengage.'
+    : 'Noise gate (low-cut + compressor). Off by default.';
 }
 
 // ============================================================================
@@ -341,6 +428,7 @@ $('join-btn').addEventListener('click', async () => {
   $('join-btn').disabled = true; $('join-error').textContent = '';
   try {
     localStream = await acquireStream($('mic-select').value);
+    _rawMicStream = localStream;
   } catch (err) {
     $('join-error').textContent = 'Microphone not accessible: ' + err.message;
     $('join-btn').disabled = false; return;
@@ -2487,6 +2575,9 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp
   $('record-btn')?.addEventListener('click', toggleRecording);
   //  react popover (hand-raise + 6 emoji)
   $('react-btn')?.addEventListener('click', openReactPopover);
+  //  noise gate toggle (gate-btn in topbar)
+  syncGateBtn();
+  $('gate-btn')?.addEventListener('click', toggleGate);
   //  pre-join preview: mic VU + echo test
   startJoinPreview().catch(() => {
     /* mic-denied is fine; the user can still try to join */

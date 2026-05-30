@@ -1921,6 +1921,16 @@ body.ptt-active::after {
   color: var(--c-text-1);
 }
 
+/* Gate-toggle engaged state */
+#gate-btn.on {
+  color: var(--c-accent);
+  background: var(--c-accent-weak);
+  border-color: var(--c-accent);
+}
+#gate-btn.on svg {
+  filter: drop-shadow(0 0 4px var(--c-accent));
+}
+
 /* --- Recorder button (topbar) ---------------------------------------------- */
 .record-btn {
   display: inline-flex;
