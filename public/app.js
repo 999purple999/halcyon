@@ -2350,6 +2350,8 @@ function trackFps(now) {
   }
 }
 
+const RTT_HISTORY_MAX = 40; // 1.5s polling * 40 = 60s window
+
 async function collectStatsAll() {
   const pcs = [...peers.values()]
     .filter((p) => p.pc)
@@ -2383,6 +2385,11 @@ async function collectStatsAll() {
       // Compute kbps from previous sample
       const prev = statsState.perPeer.get(pid);
       const nowSec = Date.now() / 1000;
+      const hist = prev?.rttHist || [];
+      if (typeof entry.rtt === 'number') {
+        hist.push(entry.rtt);
+        while (hist.length > RTT_HISTORY_MAX) hist.shift();
+      }
       if (prev) {
         const dt = nowSec - prev.t;
         if (dt > 0) {
@@ -2390,11 +2397,40 @@ async function collectStatsAll() {
           entry.kbpsUp = Math.round(((bytesSent - prev.bytesSent) * 8) / 1000 / dt);
         }
       }
-      statsState.perPeer.set(pid, { t: nowSec, bytesRecv, bytesSent });
+      statsState.perPeer.set(pid, { t: nowSec, bytesRecv, bytesSent, rttHist: hist });
+      entry.rttHist = hist;
     } catch {}
     out.push(entry);
   }
   return out;
+}
+
+// Draw a tiny RTT-over-time sparkline into a canvas. Samples are normalized
+// against a soft floor of 100 ms so a calm LAN call (1-3 ms RTT) does not
+// just paint a flat line at the bottom. Colour shifts toward warn/danger as
+// the latest sample crosses the equivalent of the toast thresholds.
+function drawRttSparkline(canvas, samples) {
+  if (!canvas || !canvas.getContext) return;
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  if (!samples || samples.length < 2) return;
+  const peak = Math.max(100, ...samples);
+  const last = samples[samples.length - 1];
+  let stroke = '#4fd1a1';
+  if (last >= 200) stroke = '#e8b257';
+  if (last >= 350) stroke = '#f0556a';
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let i = 0; i < samples.length; i++) {
+    const x = (i / (RTT_HISTORY_MAX - 1)) * w;
+    const y = h - (samples[i] / peak) * (h - 2) - 1;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
 }
 
 async function renderStatsPanel() {
@@ -2404,10 +2440,11 @@ async function renderStatsPanel() {
   if (tbody) {
     tbody.innerHTML = rows
       .map(
-        (r) => `
-        <tr>
+        (r, i) => `
+        <tr data-row-pid="${escapeHtmlText(r.pid)}">
           <td>${escapeHtmlText(r.name || r.pid)}</td>
           <td>${r.rtt ?? '—'} ${r.rtt !== null ? 'ms' : ''}</td>
+          <td><canvas class="rtt-sparkline" data-idx="${i}" width="80" height="18"></canvas></td>
           <td>${r.loss ?? '—'}</td>
           <td>${r.jitter ?? '—'}</td>
           <td>${r.kbpsDown ?? '—'}</td>
@@ -2416,6 +2453,11 @@ async function renderStatsPanel() {
         </tr>`,
       )
       .join('');
+    // After replacing the rows, draw the sparklines into the fresh canvases.
+    for (const c of tbody.querySelectorAll('canvas.rtt-sparkline')) {
+      const i = Number(c.dataset.idx);
+      drawRttSparkline(c, rows[i]?.rttHist || []);
+    }
   }
   const $$ = (id) => document.getElementById(id);
   if ($$('stats-ws')) $$('stats-ws').textContent = wsState;

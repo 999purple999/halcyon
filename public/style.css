@@ -1186,6 +1186,11 @@ body {
 .stats-table tbody tr:hover {
   background: var(--c-bg-3);
 }
+.rtt-sparkline {
+  display: block;
+  background: var(--c-bg-3);
+  border-radius: 3px;
+}
 .stats-foot {
   display: flex;
   gap: 18px;
