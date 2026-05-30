@@ -978,6 +978,79 @@ function refreshVideoGridVisibility() {
   const hasTiles = grid.querySelector('.video-tile, .video-tile-self');
   if (hasTiles) grid.classList.remove('hidden');
   else grid.classList.add('hidden');
+  applySpeakerLayout();
+}
+
+// ============================================================================
+// VIEW MODES + SPEAKER PINNING
+//
+// 'grid'    : default flex-row layout (all video tiles equal size).
+// 'speaker' : one tile becomes large (pinned or auto-picked), the others
+//             shrink into a strip. Click any tile to pin/unpin it.
+// Auto-pick priority when no manual pin: screen-share-self -> camera-self
+// -> first remote video -> first tile available.
+// ============================================================================
+let viewMode = 'grid';
+let pinnedPeerId = null;
+
+function setViewMode(mode) {
+  viewMode = mode === 'speaker' ? 'speaker' : 'grid';
+  const grid = $('video-grid');
+  grid?.classList.toggle('speaker-view', viewMode === 'speaker');
+  $('view-btn')?.setAttribute('aria-pressed', String(viewMode === 'speaker'));
+  $('view-btn')?.querySelector('.ico')
+    ?.replaceChildren(/* noop */);
+  const ico = $('view-btn')?.querySelector('.ico');
+  if (ico) ico.innerHTML = icon(viewMode === 'speaker' ? 'user' : 'users', { size: 18 });
+  applySpeakerLayout();
+}
+
+function cycleViewMode() {
+  setViewMode(viewMode === 'grid' ? 'speaker' : 'grid');
+  showToast(viewMode === 'speaker' ? 'Speaker view' : 'Grid view', 1200);
+}
+
+function applySpeakerLayout() {
+  const grid = $('video-grid');
+  if (!grid || viewMode !== 'speaker') {
+    // grid mode: strip any leftover .is-main class
+    grid?.querySelectorAll('.video-tile.is-main').forEach((t) => t.classList.remove('is-main'));
+    return;
+  }
+  let main = null;
+  if (pinnedPeerId) {
+    main = grid.querySelector(`.video-tile[data-peer-id="${CSS.escape(pinnedPeerId)}"]`);
+    if (!main && pinnedPeerId === 'self-screen') {
+      main = grid.querySelector('.video-tile-screen-self');
+    }
+    if (!main && pinnedPeerId === 'self-camera') {
+      main = grid.querySelector('.video-tile-camera-self');
+    }
+  }
+  if (!main) main = grid.querySelector('.video-tile-screen-self');
+  if (!main) main = grid.querySelector('.video-tile-camera-self');
+  if (!main) main = grid.querySelector('.video-tile');
+  for (const tile of grid.querySelectorAll('.video-tile')) {
+    tile.classList.toggle('is-main', tile === main);
+  }
+}
+
+function bindVideoGridClicks() {
+  $('video-grid')?.addEventListener('click', (e) => {
+    const tile = e.target.closest?.('.video-tile');
+    if (!tile) return;
+    let id = tile.dataset.peerId;
+    if (!id) {
+      if (tile.classList.contains('video-tile-screen-self')) id = 'self-screen';
+      else if (tile.classList.contains('video-tile-camera-self')) id = 'self-camera';
+      else if (tile.classList.contains('video-tile-self')) id = 'self';
+      else return;
+    }
+    pinnedPeerId = pinnedPeerId === id ? null : id;
+    if (viewMode !== 'speaker') setViewMode('speaker');
+    applySpeakerLayout();
+    showToast(pinnedPeerId ? 'Tile pinned' : 'Tile unpinned', 1200);
+  });
 }
 
 function ensureSelfVideoTile() {
@@ -1834,6 +1907,9 @@ document.addEventListener('keydown', (e) => {
     case 'r':
       openReactPopover();
       break;
+    case 'g':
+      cycleViewMode();
+      break;
     case '?':
       toggleShortcutsCheatsheet();
       break;
@@ -2578,6 +2654,10 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp
   //  noise gate toggle (gate-btn in topbar)
   syncGateBtn();
   $('gate-btn')?.addEventListener('click', toggleGate);
+  //  view-mode toggle + speaker pinning
+  setViewMode('grid');
+  $('view-btn')?.addEventListener('click', cycleViewMode);
+  bindVideoGridClicks();
   //  pre-join preview: mic VU + echo test
   startJoinPreview().catch(() => {
     /* mic-denied is fine; the user can still try to join */

@@ -1931,6 +1931,43 @@ body.ptt-active::after {
   filter: drop-shadow(0 0 4px var(--c-accent));
 }
 
+/* --- Speaker view + pinning ---------------------------------------------- */
+/* Speaker mode: vertical column, one .is-main tile much larger than the rest.
+   The pinned tile gets an accent ring; click a tile to (un)pin it. */
+.video-grid.speaker-view {
+  flex-direction: column;
+  align-items: center;
+  bottom: 130px;
+  max-height: calc(100vh - 280px);
+}
+.video-grid.speaker-view .video-tile {
+  width: 140px;
+  height: 79px;
+  cursor: pointer;
+}
+.video-grid.speaker-view .video-tile.is-main {
+  width: min(72vw, 880px);
+  height: auto;
+  aspect-ratio: 16 / 9;
+  margin-bottom: 12px;
+  box-shadow:
+    0 0 0 2px var(--c-accent-ring),
+    var(--e-2);
+  border-color: var(--c-accent);
+}
+.video-grid:not(.speaker-view) .video-tile {
+  cursor: pointer;
+}
+@media (max-width: 720px) {
+  .video-grid.speaker-view .video-tile {
+    width: 110px;
+    height: 62px;
+  }
+  .video-grid.speaker-view .video-tile.is-main {
+    width: 94vw;
+  }
+}
+
 /* --- Recorder button (topbar) ---------------------------------------------- */
 .record-btn {
   display: inline-flex;
