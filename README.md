@@ -1,7 +1,7 @@
 # HALCYON
 
 > Self-hosted realtime mesh voice/video platform.
-> Local-first, zero-cloud — your LAN, your data.
+> Local-first, zero-cloud. Your LAN, your data.
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPL_v3-blue.svg)](LICENSE)
 [![Node 24+](https://img.shields.io/badge/Node-24+-339933.svg)](https://nodejs.org)
@@ -22,7 +22,7 @@ on the server.
 - **1080p60 video** with codec preference AV1 → H.264 (NVENC if
   available) → VP9 → VP8, max-bitrate 6 Mbps, hardware-accelerated when
   available.
-- **Screen sharing with tab/system audio** capture — the screen-share
+- **Screen sharing with tab/system audio** capture. The screen-share
   audio rides on the same `MediaStream` as the video and plays through
   the remote `<video>` tile (the mic `<audio>` element stays
   independent, so neither stream overwrites the other).
@@ -137,21 +137,21 @@ HALCYON is built keyboard-first and screen-reader friendly:
 
 The client is hot-path conscious:
 
-- **Pause-on-hidden** — the rAF tick loop is fully suspended when the
+- **Pause-on-hidden**. The rAF tick loop is fully suspended when the
   tab loses visibility (`document.hidden`); `getStats()` polling also
   skips background ticks.
-- **Incremental chat render** — new messages append to the DOM,
+- **Incremental chat render**. New messages append to the DOM,
   edits/deletes/reactions mutate the existing node in place. No more
   full-list rebuild on every event (preserves text selection & scroll).
-- **Cached DOM lookups** — the participants grid uses a `Map<id, el>`
+- **Cached DOM lookups**. The participants grid uses a `Map<id, el>`
   to avoid a `querySelector` per peer per frame.
-- **Threshold-gated CSS var writes** — speaking-intensity (`--rms`)
+- **Threshold-gated CSS var writes**. Speaking-intensity (`--rms`)
   only updates on delta ≥ 0.02 to avoid style recalc spam.
-- **Compressed FFT** — the audio analyser uses `fftSize=256` (half of
+- **Compressed FFT**. The audio analyser uses `fftSize=256` (half of
   the original), since DOM rendering doesn't need fine-grained bins.
-- **Smaller paint area** — the heavy multi-radial-gradient star-drift
+- **Smaller paint area**. The heavy multi-radial-gradient star-drift
   layer is gone; aurora is a single softer layer.
-- **Static asset cache** — server keeps SHA-1 ETags in memory and
+- **Static asset cache**. Server keeps SHA-1 ETags in memory and
   serves brotli/gzip pre-compressed bodies; `If-None-Match` returns
   `304` with zero body for unchanged reloads.
 
