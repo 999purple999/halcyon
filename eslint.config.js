@@ -2,8 +2,28 @@
 // Minimo indispensabile: catch errori semantici comuni senza imporre style
 // (prettier gestisce lo style).
 export default [
+  // Service worker (different globals: self, caches, clients, fetch)
+  {
+    files: ['public/sw.js'],
+    languageOptions: {
+      ecmaVersion: 2024,
+      sourceType: 'script',
+      globals: {
+        self: 'readonly',
+        caches: 'readonly',
+        clients: 'readonly',
+        fetch: 'readonly',
+        URL: 'readonly',
+        Promise: 'readonly',
+      },
+    },
+    rules: {
+      'no-undef': 'error',
+    },
+  },
   {
     files: ['server.js', 'public/**/*.js', 'tests/**/*.js'],
+    ignores: ['public/sw.js'],
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'module',
