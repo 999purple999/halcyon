@@ -831,16 +831,19 @@ async function handleSignal(from, data) {
       const isOffer = data.sdp.type === 'offer';
       const offerCollision = isOffer && (peer._makingOffer || pc.signalingState !== 'stable');
       if (!peer._isPolite && offerCollision) {
-        __ar.log.debug(`peer=${from} ignoring colliding offer (impolite)`);
+        __ar.log.info(`[sig] peer=${from} ignoring colliding offer (impolite)`);
         return;
       }
+      __ar.log.info(`[sig] peer=${from} setRemoteDescription type=${data.sdp.type}`);
       await pc.setRemoteDescription(data.sdp); // implicit rollback if polite + collision
       if (isOffer) {
         const a = await pc.createAnswer();
         await pc.setLocalDescription(tuneOpus(a));
         maximizeBitrate(pc);
+        __ar.log.info(`[sig] peer=${from} sending answer`);
         signal(from, { sdp: pc.localDescription });
       } else {
+        __ar.log.info(`[sig] peer=${from} answer applied, ICE should start`);
         maximizeBitrate(pc);
       }
     } else if (data.candidate) {
@@ -852,8 +855,10 @@ async function handleSignal(from, data) {
       }
     }
   } catch (e) {
-    // Negotiation race / state mismatch. Downgrade to warn (no impact on errors ring).
-    __ar.log.warn(`handleSignal peer=${from}`, e?.name || e);
+    // Negotiation race / state mismatch. Surface to user so silent failures
+    // (the symptom: WS works, audio track attaches via SDP, but ICE never
+    // connects) become visible.
+    __ar.log.warn(`[sig] handleSignal peer=${from}`, e?.name || e, e?.message || '');
   }
 }
 
@@ -1437,7 +1442,13 @@ function openSelfPopover(x, y) {
 }
 function showPopover(po, x, y) {
   po.classList.remove('hidden');
-  const w = po.offsetWidth, h = po.offsetHeight;
+  const w = po.offsetWidth,
+    h = po.offsetHeight;
+  // W / H used to be globals set by the legacy canvas-based participant view;
+  // they were removed during the SVG-icon refactor and clicking a peer threw
+  // 'W is not defined' uncaught here. Read viewport size live each call.
+  const W = window.innerWidth;
+  const H = window.innerHeight;
   po.style.left = Math.max(8, Math.min(W - w - 8, x - w / 2)) + 'px';
   po.style.top = Math.max(8, Math.min(H - h - 8, y + 16)) + 'px';
 }
