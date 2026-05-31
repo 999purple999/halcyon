@@ -654,39 +654,14 @@ body {
   transform: scale(calc(1 + 0.04 * var(--rms)));
 }
 
-/* ===== Camera-on layout: full-bleed video tile (Zoom / Discord pattern) =====
-   When .participant.has-camera the tile no longer renders the small circular
-   avatar in the centre with padding around it. Instead the <video> fills the
-   whole tile edge-to-edge, the name becomes a translucent overlay at the
-   bottom-left, and the status badges turn into floating chips at the
-   top-right. The outer tile border carries the speak / hand-up ring exactly
-   as in avatar mode, so behaviour stays continuous. */
-.participant.has-camera {
-  padding: 0;
-  gap: 0;
-  overflow: hidden;
-  background: #000;
-  border-color: var(--c-line-2);
-}
-.participant.has-camera.self {
-  border-color: rgba(79, 209, 161, 0.5);
-}
-.participant.has-camera.speaking {
-  border-color: var(--c-accent);
-  background: #000;
-}
+/* When the participant has their camera on, the avatar slot becomes a video
+   container: same outer shape (circle), but its child <video> fills it. The
+   speak ring + hand badge keep their existing positioning. */
 .participant-avatar.participant-video-wrap {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
   padding: 0;
-  border: none;
-  border-radius: inherit;
-  background: #000;
-  box-shadow: none;
+  overflow: hidden;
+  background: var(--c-bg-4);
   display: block;
-  transform: none !important;
 }
 .participant-video-inline {
   width: 100%;
@@ -697,53 +672,6 @@ body {
 }
 .participant.self .participant-video-inline {
   transform: scaleX(-1); /* selfie mirror, matches the legacy bottom tile */
-}
-.participant.has-camera .participant-name {
-  position: absolute;
-  left: 10px;
-  right: 10px;
-  bottom: 10px;
-  z-index: 3;
-  padding: 4px 9px;
-  border-radius: var(--r-sm);
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  color: #fff;
-  font-size: var(--t-sm);
-  font-weight: 600;
-  letter-spacing: -0.005em;
-  width: max-content;
-  max-width: calc(100% - 20px);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
-}
-.participant.has-camera .participant-badge {
-  z-index: 4; /* always over the video + name overlay */
-  top: 10px;
-  right: 10px;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-.participant.has-camera .participant-badge.mute-badge {
-  color: var(--c-danger);
-}
-.participant.has-camera .participant-badge.speak-badge,
-.participant.has-camera .participant-badge.hand-badge {
-  /* keep their existing accent colour against the dark video */
-}
-/* Soft inner gradient so the name overlay never gets lost on bright frames. */
-.participant.has-camera::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(180deg, transparent 65%, rgba(0, 0, 0, 0.45) 100%);
-  border-radius: inherit;
-  z-index: 1;
-}
-.participant.has-camera .participant-avatar.participant-video-wrap {
-  z-index: 0;
 }
 
 .participant-name {
