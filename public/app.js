@@ -259,35 +259,41 @@ let outputSinkId = '';     // device di uscita scelto
 const ENV_LEN = 48;        // campioni di inviluppo per nodo (~0.8s @60fps)
 const SPEAK_TH = 0.055;    // soglia "sta parlando" (RMS)
 
-// STUN for NAT discovery + a public TURN fallback for the cases where peers
-// cannot reach each other directly (different networks, symmetric NAT,
-// browser sandbox blocks UDP host candidates). The TURN relay breaks the
-// "zero-cloud" promise by routing media through openrelay.metered.ca when
-// no direct path exists, but the alternative is the call simply not
-// connecting at all. Direct P2P is still attempted first; TURN only kicks
-// in when ICE finds no working candidate-pair otherwise. The topo badge
-// shows "Relay (TURN)" when this path is in use.
-const RTC_CONFIG = {
-  iceServers: [
-    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
-    {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-  ],
-  iceCandidatePoolSize: 4,
-};
+// ICE servers. Halcyon is LAN-first: STUN suffices for same-LAN peers, and
+// no TURN is bundled by default (the previously-bundled openrelay.metered.ca
+// public TURN was returning 502 Bad Gateway as of 2026-05-31, which made
+// things WORSE — ICE wasted its budget on a dead relay instead of failing
+// fast). For cross-network calls (friend on a different LAN, symmetric NAT,
+// UDP-blocking firewall) bring your own TURN; supply it via:
+//
+//   ?turn=turn:host:port&turnUser=USER&turnPass=PASS
+//
+// on the URL, or set window.HALCYON_TURN before app.js runs. See
+// docs/TROUBLESHOOTING.md.
+function buildRtcConfig() {
+  const cfg = {
+    iceServers: [
+      { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+    ],
+    iceCandidatePoolSize: 4,
+  };
+  try {
+    const qs = new URLSearchParams(location.search);
+    const turnUrl = qs.get('turn') || window.HALCYON_TURN;
+    const turnUser = qs.get('turnUser') || window.HALCYON_TURN_USER || '';
+    const turnPass = qs.get('turnPass') || window.HALCYON_TURN_PASS || '';
+    if (turnUrl) {
+      const entry = { urls: turnUrl };
+      if (turnUser) entry.username = turnUser;
+      if (turnPass) entry.credential = turnPass;
+      cfg.iceServers.push(entry);
+    }
+  } catch {
+    /* URLSearchParams or window access blocked; stick with STUN-only */
+  }
+  return cfg;
+}
+const RTC_CONFIG = buildRtcConfig();
 
 // ---------- Self ----------
 const self = { id: 'self', name: '', rms: 0, env: new Float32Array(ENV_LEN), speaking: false, analyser: null, ctx: null, handRaised: false };
@@ -950,8 +956,8 @@ async function maximizeBitrate(pc) {
   // on some negotiation paths, in which case p.encodings[0] is undefined and
   // a naive assignment throws TypeError. Always ensure at least one encoding.
   //
-  // Senders flagged with _musicCap are tuned by tuneAudioForMusic at the music-
-  // specific 320 kbps cap, so the negotiation loop skips them.
+  // Senders flagged with _musicCap are tuned by tuneAudioForMusic at the
+  // music-specific cap, so the negotiation loop skips them.
   for (const sender of pc.getSenders()) {
     if (!sender.track || sender.track.kind !== 'audio') continue;
     if (sender._musicCap) continue;
@@ -966,19 +972,21 @@ async function maximizeBitrate(pc) {
   }
 }
 
-// Music-share sender tune. 320 kbps stereo Opus is the practical sweet spot
-// (transparent for most listeners, fits in a typical LAN budget). Flags the
-// sender so the global maximizeBitrate skips it on later negotiation passes.
+// Music-share sender tune. 510 kbps stereo Opus is the absolute spec maximum
+// (above that the encoder ignores the setting). Transparent for any source
+// material. The earlier 320 kbps cap was a compromise for slow links; on
+// LAN there is no reason to clip below max. _musicCap flag tells the global
+// maximizeBitrate to leave this sender alone on subsequent negotiation passes.
 async function tuneAudioForMusic(sender, label) {
   try {
     const p = sender.getParameters();
     if (!p.encodings || p.encodings.length === 0) p.encodings = [{}];
-    p.encodings[0].maxBitrate = 320000;
+    p.encodings[0].maxBitrate = 510000;
     p.encodings[0].priority = 'high';
     p.encodings[0].networkPriority = 'high';
     sender._musicCap = true;
     await sender.setParameters(p);
-    __ar.log.info(`[music] ${label} maxBitrate=320kbps stereo`);
+    __ar.log.info(`[music] ${label} maxBitrate=510kbps stereo (Opus max)`);
   } catch (e) {
     __ar.log.warn(`[music] ${label} setParameters`, e);
   }
@@ -1508,7 +1516,12 @@ const VIDEO_PROFILE_HQ = {
   frameRate: { ideal: 60, min: 24 },
 };
 const PREFERRED_VIDEO_CODECS = ['video/AV1', 'video/H264', 'video/VP9', 'video/VP8'];
-const VIDEO_MAX_BITRATE = 6_000_000; // 6 Mbps per 1080p60 hardware-encoded
+// 12 Mbps for 1080p60 hardware-encoded — high quality target, comfortable
+// for gameplay capture (Ready or Not, etc). Below 8 Mbps the encoder starts
+// throwing away high-frequency detail in fast motion; above 15 Mbps the
+// LAN can handle it but the receive-side decoder may drop frames on weak
+// CPUs. 12 is the practical sweet spot.
+const VIDEO_MAX_BITRATE = 12_000_000;
 
 /**
  * Applica codec preference su un transceiver. AV1 first se Chrome lo supporta.
@@ -1702,15 +1715,28 @@ async function startScreenShare() {
   // are accepted). VIDEO_PROFILE_HQ has `min` keys for getUserMedia/camera, so
   // here we keep only the `ideal` subset. Without this filter Chrome rejects
   // with TypeError: "min constraints are not supported" → screen-share never starts.
+  // 1080p60 best quality. We pass ideal AND max so Chrome targets 1080p60
+  // exactly when the source can deliver it (full screen on a 1080p+ display,
+  // a borderless 1080p game window). 'max' is allowed on getDisplayMedia
+  // (unlike 'min', which the spec forbids). If the user picks a tab/window
+  // smaller than 1080p the source is naturally the cap and Chrome downsizes
+  // to whatever the surface actually is. For Ready or Not at 1080p60 the
+  // user should pick the full-screen game capture, not a small window.
   const videoConstraints = {
-    width: { ideal: VIDEO_PROFILE_HQ.width.ideal },
-    height: { ideal: VIDEO_PROFILE_HQ.height.ideal },
-    frameRate: { ideal: VIDEO_PROFILE_HQ.frameRate.ideal },
+    width: { ideal: VIDEO_PROFILE_HQ.width.ideal, max: VIDEO_PROFILE_HQ.width.ideal },
+    height: { ideal: VIDEO_PROFILE_HQ.height.ideal, max: VIDEO_PROFILE_HQ.height.ideal },
+    frameRate: { ideal: VIDEO_PROFILE_HQ.frameRate.ideal, max: VIDEO_PROFILE_HQ.frameRate.ideal },
   };
   try {
     screenStream = await navigator.mediaDevices.getDisplayMedia({
       video: videoConstraints,
-      audio: true, // tab/system audio when supported
+      audio: {
+        // Hi-fi tab/system audio: disable browser DSP to preserve the source
+        // dynamics; the receiver gets the original tab audio untouched.
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
     });
   } catch (e) {
     if (e.name === 'NotAllowedError') {
@@ -1845,7 +1871,7 @@ function updateScreenShareUi(active, mode) {
 }
 
 // ============================================================================
-// MUSIC SHARE — getDisplayMedia audio-only at 320 kbps stereo
+// MUSIC SHARE — getDisplayMedia audio-only at 510 kbps stereo Opus
 //
 // Why this exists: getDisplayMedia by spec REQUIRES a video constraint, you
 // cannot ask for audio-only directly. The workaround is to ask for the smallest
@@ -1853,11 +1879,11 @@ function updateScreenShareUi(active, mode) {
 // addTrack the audio. The picker still shows tab/window/screen choices; the
 // user picks a Chrome tab that has audio (a music site, a YouTube video, etc).
 //
-// Quality target: 320 kbps stereo Opus. The SDP fmtp from tuneOpus already
-// negotiates stereo + maxaveragebitrate=510000 (session-wide setting), and
-// tuneAudioForMusic clamps the per-sender encoding to 320 kbps so the bitrate
-// stays predictable even when the audio track also benefits from the higher
-// SDP cap.
+// Quality target: 510 kbps stereo Opus (spec ceiling). The SDP fmtp from
+// tuneOpus negotiates stereo + maxaveragebitrate=510000 session-wide;
+// tuneAudioForMusic clamps the per-sender encoding to the same 510 kbps
+// so the music sender does not get re-clamped to a lower value by the
+// global maximizeBitrate on subsequent renegotiation.
 // ============================================================================
 async function startMusicShare() {
   if (screenStream) return stopScreenShare(); // already sharing something
@@ -1907,7 +1933,7 @@ async function startMusicShare() {
   }
   ensureSelfMusicTile();
   updateScreenShareUi(true, 'music');
-  announce('Sharing tab audio at 320 kbps');
+  announce('Sharing tab audio at 510 kbps stereo');
   __ar.log.info(`[music] sharing started, peers=${targets.length}`);
 }
 
@@ -1923,7 +1949,7 @@ function ensureSelfMusicTile() {
   tile.innerHTML =
     `<div class="music-tile-body">${icon('music', { size: 24 })}` +
     `<div class="music-tile-text"><span class="music-tile-title">Sharing audio</span>` +
-    `<span class="music-tile-sub">320 kbps stereo</span></div></div>`;
+    `<span class="music-tile-sub">510 kbps stereo</span></div></div>`;
   grid.appendChild(tile);
   refreshVideoGridVisibility();
 }
@@ -1950,7 +1976,7 @@ function openShareMenu() {
       <span class="share-option-icon">${icon('music', { size: 22 })}</span>
       <span class="share-option-text">
         <span class="share-option-title">Audio only</span>
-        <span class="share-option-sub">Stream tab audio at 320 kbps stereo. No video.</span>
+        <span class="share-option-sub">Stream tab audio at 510 kbps stereo Opus. No video.</span>
       </span>
     </button>
     <p class="share-menu-foot">Esc to close.</p>
@@ -3152,7 +3178,7 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp
   //  chat drawer
   bindChatUi();
   //  screen share toggle: when sharing -> stop, when idle -> show the share
-  //  picker (screen+audio vs audio-only at 320 kbps).
+  //  picker (screen+audio vs audio-only at 510 kbps stereo).
   $('screen-share-btn')?.addEventListener('click', () => {
     if (screenStream) stopScreenShare();
     else openShareMenu();
