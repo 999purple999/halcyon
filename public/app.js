@@ -969,7 +969,16 @@ function removePeer(id) {
     } catch {}
   }
   if (peer.audioEl) peer.audioEl.remove();
-  if (peer.videoEl) peer.videoEl.parentElement?.remove();
+  if (peer.videoEl) {
+    // The video element may live inside a participant tile (camera inline)
+    // OR a bottom video-tile (screen share). Remove whichever ancestor exists.
+    if (peer.videoTile) peer.videoTile.remove();
+    else peer.videoEl.remove();
+  }
+  if (peer._cloneStream) {
+    for (const t of peer._cloneStream.getTracks()) t.stop();
+    peer._cloneStream = null;
+  }
   if (peer.ctx) peer.ctx.close().catch(() => {});
   peers.delete(id);
   refreshVideoGridVisibility();
@@ -1157,14 +1166,29 @@ function ensureSelfVideoTile() {
 // ============================================================================
 function setupAnalyser(target, stream) {
   if (target.ctx) target.ctx.close().catch(() => {});
+  // Release any previous clone tracks so the device handle does not leak.
+  if (target._cloneStream) {
+    for (const t of target._cloneStream.getTracks()) t.stop();
+    target._cloneStream = null;
+  }
   const ctx = new AudioContext();
-  const src = ctx.createMediaStreamSource(stream);
+  // CRITICAL: Chrome silences the sibling <audio>.srcObject playback when a
+  // MediaStreamAudioSourceNode consumes the same underlying remote tracks.
+  // The fix is to clone the audio tracks into a fresh MediaStream and route
+  // the analyser off the clone, leaving the original tracks untouched for
+  // the <audio> element. See crbug.com/687574 and many follow-ups; it
+  // reproduces consistently against WebRTC remote streams. Self-mic isn't
+  // strictly affected but we use the same cloned path for symmetry.
+  const cloneStream = new MediaStream();
+  for (const t of stream.getAudioTracks()) cloneStream.addTrack(t.clone());
+  const src = ctx.createMediaStreamSource(cloneStream);
   const an = ctx.createAnalyser();
-  an.fftSize = 256; // metà dell'originale: in DOM-mode non serve risoluzione FFT, solo RMS
+  an.fftSize = 256; // DOM-mode does not need fine FFT bins, only RMS
   an.smoothingTimeConstant = 0.7;
   src.connect(an);
   target.ctx = ctx;
   target.analyser = an;
+  target._cloneStream = cloneStream;
   target._buf = new Uint8Array(an.frequencyBinCount);
 }
 function setupSelfAnalyser() {
