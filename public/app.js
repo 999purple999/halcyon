@@ -983,51 +983,31 @@ function attachRemoteVideo(id, stream) {
   if (!peer) return;
   const grid = $('video-grid');
   if (!grid) return;
-  // Heuristic: a video-only stream is a camera (mount inline in the
-  // participant tile, no big bottom tile). A stream with audio + video is a
-  // screen-share with system audio (keep the legacy big tile so peers see it).
-  const isScreenShare = stream.getAudioTracks().length > 0;
-  if (!peer.videoEl) {
+  let tile = peer.videoTile;
+  if (!tile) {
+    tile = document.createElement('div');
+    tile.className = 'video-tile';
+    tile.dataset.peerId = id;
     const video = document.createElement('video');
     video.autoplay = true;
     video.playsInline = true;
+    // NOT muted: if this stream carries screen-share audio, the video element
+    // is responsible for playing it (the mic audio uses a separate <audio> el).
+    // The output sink follows the user's selected device when supported.
     video.muted = false;
     if (outputSinkId && video.setSinkId) video.setSinkId(outputSinkId).catch(() => {});
+    const label = document.createElement('div');
+    label.className = 'video-label';
+    label.textContent = peer.name;
+    tile.appendChild(video);
+    tile.appendChild(label);
+    grid.appendChild(tile);
+    peer.videoTile = tile;
     peer.videoEl = video;
   }
   peer.videoEl.srcObject = stream;
+  // Respect global deafen.
   peer.videoEl.volume = deafened ? 0 : 1;
-
-  if (isScreenShare) {
-    // Wrap (or re-wrap) into a bottom tile and remove any camera-inline flag.
-    if (!peer.videoTile || !peer.videoTile.isConnected || peer.videoTile.dataset.kind !== 'screen') {
-      const tile = document.createElement('div');
-      tile.className = 'video-tile';
-      tile.dataset.peerId = id;
-      tile.dataset.kind = 'screen';
-      const label = document.createElement('div');
-      label.className = 'video-label';
-      label.textContent = peer.name;
-      tile.appendChild(peer.videoEl);
-      tile.appendChild(label);
-      grid.appendChild(tile);
-      peer.videoTile = tile;
-    }
-    peer.videoEl.classList.remove('participant-video-inline');
-    peer.hasCamera = false;
-  } else {
-    // Camera: drop any pre-existing bottom tile, mark for inline mount.
-    if (peer.videoTile) {
-      peer.videoTile.remove();
-      peer.videoTile = null;
-    }
-    peer.videoEl.classList.add('participant-video-inline');
-    if (!peer.hasCamera) {
-      peer.hasCamera = true;
-      _lastGridSig = ''; // force re-render so the inline slot picks the video up
-      renderParticipantsGrid();
-    }
-  }
   tryPlayVideo(peer.videoEl, `[video peer=${id}]`);
   refreshVideoGridVisibility();
 }
@@ -1206,17 +1186,7 @@ function renderParticipantsGrid() {
   for (const n of all) {
     const isSelf = n === self;
     const muted = isSelf && !micEnabled;
-    const hasCam = isSelf ? !!_selfCameraVideoEl : !!n.hasCamera;
-    sig +=
-      (isSelf ? 'S' : n.id || '?') +
-      '|' +
-      (n.name || '') +
-      '|' +
-      (n.speaking && !muted ? 's' : '.') +
-      (muted ? 'm' : '.') +
-      (n.handRaised ? 'h' : '.') +
-      (hasCam ? 'c' : '.') +
-      ';';
+    sig += (isSelf ? 'S' : n.id || '?') + '|' + (n.name || '') + '|' + (n.speaking && !muted ? 's' : '.') + (muted ? 'm' : '.') + (n.handRaised ? 'h' : '.') + ';';
   }
   if (sig !== _lastGridSig) {
     _lastGridSig = sig;
@@ -1226,7 +1196,6 @@ function renderParticipantsGrid() {
         const muted = isSelf && !micEnabled;
         const speaking = n.speaking && !muted;
         const handUp = !!n.handRaised;
-        const hasCam = isSelf ? !!_selfCameraVideoEl : !!n.hasCamera;
         const name = isSelf ? myName + ' (you)' : n.name || '?';
         const init = initials(name);
         const cls = ['participant'];
@@ -1234,18 +1203,11 @@ function renderParticipantsGrid() {
         if (speaking) cls.push('speaking');
         if (muted) cls.push('muted');
         if (handUp) cls.push('hand-up');
-        if (hasCam) cls.push('has-camera');
         const sid = isSelf ? 'self' : n.id;
         const handTag = handUp ? ' (hand raised)' : '';
         const stateTag = muted ? ' (mic muted)' : speaking ? ' (speaking)' : '';
-        // Avatar slot: either text initials OR a video-mount placeholder. The
-        // <video> element is attached after innerHTML is set so we don't have
-        // to template it (preserves the live MediaStream binding).
-        const avatarSlot = hasCam
-          ? `<div class="participant-avatar participant-video-wrap" data-video-mount="${escapeHtml(String(sid))}"></div>`
-          : `<div class="participant-avatar"><span>${escapeHtml(init)}</span></div>`;
         return `<div class="${cls.join(' ')}" role="listitem" data-pid="${escapeHtml(String(sid))}" tabindex="0" aria-label="${escapeHtml(name)}${stateTag}${handTag}">
-          ${avatarSlot}
+          <div class="participant-avatar"><span>${escapeHtml(init)}</span></div>
           <div class="participant-name">${escapeHtml(name)}</div>
           ${handUp ? `<div class="participant-badge hand-badge" title="Hand raised">${icon('hand', { size: 14 })}</div>` : muted ? `<div class="participant-badge mute-badge" title="Microphone muted">${icon('mic-off', { size: 14 })}</div>` : speaking ? `<div class="participant-badge speak-badge" title="Speaking">${icon('mic', { size: 14 })}</div>` : ''}
         </div>`;
@@ -1254,17 +1216,6 @@ function renderParticipantsGrid() {
     // ricostruisci cache id→element (fatto una volta per re-render, non per frame)
     _gridElById.clear();
     for (const el of grid.children) _gridElById.set(el.dataset.pid, el);
-    // Attach the live video elements into their respective slots.
-    if (_selfCameraVideoEl) {
-      const slot = grid.querySelector('[data-video-mount="self"]');
-      if (slot) slot.appendChild(_selfCameraVideoEl);
-    }
-    for (const peer of peers.values()) {
-      if (peer.hasCamera && peer.videoEl) {
-        const slot = grid.querySelector(`[data-video-mount="${CSS.escape(peer.id)}"]`);
-        if (slot) slot.appendChild(peer.videoEl);
-      }
-    }
   }
   // Aggiorna SOLO la "intensità" speaking via CSS var (no re-render DOM).
   // Lookup via Map invece di querySelector → O(1) costante per peer.
@@ -1529,49 +1480,33 @@ function stopCamera() {
   cameraStream = null;
   for (const { sender, pc } of cameraSenders) {
     if (!pc) continue;
-    try {
-      pc.removeTrack(sender);
-    } catch (e) {
-      __ar.log.warn('[camera] removeTrack', e);
-    }
+    try { pc.removeTrack(sender); } catch (e) { __ar.log.warn('[camera] removeTrack', e); }
   }
   cameraSenders = [];
-  // Drop the inline self camera element if it was mounted in the tile, plus
-  // the legacy video-grid tile if anything was still pointing at it.
-  if (_selfCameraVideoEl) {
-    _selfCameraVideoEl.srcObject = null;
-    _selfCameraVideoEl.remove();
-    _selfCameraVideoEl = null;
-  }
   document.querySelector('.video-tile-camera-self')?.remove();
-  _lastGridSig = '';
-  renderParticipantsGrid();
   refreshVideoGridVisibility();
   videoEnabled = false;
   updateCameraUi(false);
   __ar.log.info('[camera] disattivata');
 }
 
-// Self camera video element. Lives outside the participants-grid template so
-// re-renders (signature changes) don't destroy and re-create it; the grid
-// renderer plucks it into the right .participant-video-wrap on each pass.
-let _selfCameraVideoEl = null;
-
 function ensureSelfCameraTile(stream) {
-  if (_selfCameraVideoEl) {
-    _selfCameraVideoEl.srcObject = stream;
-    return;
-  }
+  const grid = $('video-grid');
+  if (!grid) return;
+  if (document.querySelector('.video-tile-camera-self')) return;
+  const tile = document.createElement('div');
+  tile.className = 'video-tile video-tile-self video-tile-camera-self';
   const video = document.createElement('video');
   video.autoplay = true;
   video.playsInline = true;
   video.muted = true;
   video.srcObject = stream;
-  video.className = 'participant-video-inline';
-  _selfCameraVideoEl = video;
-  // Force a re-render so the self tile picks the video into its slot.
-  _lastGridSig = '';
-  renderParticipantsGrid();
+  const label = document.createElement('div');
+  label.className = 'video-label';
+  label.textContent = myName + ' (you)';
+  tile.appendChild(video);
+  tile.appendChild(label);
+  grid.appendChild(tile);
   video.play().catch(() => {});
   refreshVideoGridVisibility();
 }
