@@ -653,6 +653,27 @@ body {
   border-color: var(--c-accent);
   transform: scale(calc(1 + 0.04 * var(--rms)));
 }
+
+/* When the participant has their camera on, the avatar slot becomes a video
+   container: same outer shape (circle), but its child <video> fills it. The
+   speak ring + hand badge keep their existing positioning. */
+.participant-avatar.participant-video-wrap {
+  padding: 0;
+  overflow: hidden;
+  background: var(--c-bg-4);
+  display: block;
+}
+.participant-video-inline {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: inherit;
+}
+.participant.self .participant-video-inline {
+  transform: scaleX(-1); /* selfie mirror, matches the legacy bottom tile */
+}
+
 .participant-name {
   font-size: var(--t-md);
   font-weight: 600;
