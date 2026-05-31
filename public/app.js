@@ -259,7 +259,35 @@ let outputSinkId = '';     // device di uscita scelto
 const ENV_LEN = 48;        // campioni di inviluppo per nodo (~0.8s @60fps)
 const SPEAK_TH = 0.055;    // soglia "sta parlando" (RMS)
 
-const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+// STUN for NAT discovery + a public TURN fallback for the cases where peers
+// cannot reach each other directly (different networks, symmetric NAT,
+// browser sandbox blocks UDP host candidates). The TURN relay breaks the
+// "zero-cloud" promise by routing media through openrelay.metered.ca when
+// no direct path exists, but the alternative is the call simply not
+// connecting at all. Direct P2P is still attempted first; TURN only kicks
+// in when ICE finds no working candidate-pair otherwise. The topo badge
+// shows "Relay (TURN)" when this path is in use.
+const RTC_CONFIG = {
+  iceServers: [
+    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+  ],
+  iceCandidatePoolSize: 4,
+};
 
 // ---------- Self ----------
 const self = { id: 'self', name: '', rms: 0, env: new Float32Array(ENV_LEN), speaking: false, analyser: null, ctx: null, handRaised: false };
@@ -729,16 +757,24 @@ function ensurePeerMesh(id, name, initiator) {
   });
   pc.addEventListener('connectionstatechange', () => {
     const st = pc.connectionState;
-    __ar.log.debug(`peer=${id} conn=${st}`);
-    if (st === 'failed') tryIceRestart(peer, id);
-    else if (st === 'disconnected') {
+    __ar.log.info(`[pc] peer=${id} conn=${st}`); // bumped to info for debug
+    if (st === 'connected') {
+      showToast(`Connected to ${peer.name || id}`, 1800);
+    } else if (st === 'failed') {
+      __ar.log.warn(`[pc] peer=${id} FAILED, attempting ICE restart`);
+      showToast(`Connection to ${peer.name || id} failed, retrying`, 3000);
+      tryIceRestart(peer, id);
+    } else if (st === 'disconnected') {
       setTimeout(() => {
         if (pc.connectionState === 'disconnected') tryIceRestart(peer, id);
       }, 5000);
     }
   });
   pc.addEventListener('iceconnectionstatechange', () =>
-    __ar.log.debug(`peer=${id} ice=${pc.iceConnectionState}`),
+    __ar.log.info(`[ice] peer=${id} state=${pc.iceConnectionState}`),
+  );
+  pc.addEventListener('icegatheringstatechange', () =>
+    __ar.log.info(`[ice] peer=${id} gathering=${pc.iceGatheringState}`),
   );
 
   // Universal negotiationneeded handler. Fires for:
