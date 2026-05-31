@@ -943,8 +943,12 @@ async function tuneAudioForMusic(sender, label) {
   }
 }
 function attachRemoteAudio(id, stream) {
-  const peer = peers.get(id); if (!peer) return;
-  if (!stream) { __ar.log.warn(`[track] stream nullo per peer=${id}`); return; }
+  const peer = peers.get(id);
+  if (!peer) return;
+  if (!stream) {
+    __ar.log.warn(`[track] stream nullo per peer=${id}`);
+    return;
+  }
   let el = peer.audioEl;
   if (!el) {
     el = document.createElement('audio');
@@ -958,7 +962,12 @@ function attachRemoteAudio(id, stream) {
   if (outputSinkId && el.setSinkId) el.setSinkId(outputSinkId).catch(() => {});
   tryPlayAudio(el, `[track peer=${id}]`);
   __ar.log.info(`[track] audio agganciato peer=${id} tracks=${stream.getAudioTracks().length}`);
-  setupAnalyser(peer, stream);
+  // INTENTIONALLY NOT calling setupAnalyser for remote peers. Chrome's
+  // MediaStreamAudioSourceNode race silences the sibling <audio>.srcObject
+  // playback even with the clone-tracks workaround on some versions; the
+  // user gets no sound at all. Audio playback is the deal-breaker; the
+  // remote speak-pulse indicator is a nice-to-have, dropped here.
+  // Self analyser (local mic stream) is unaffected and stays on.
 }
 function removePeer(id) {
   const peer = peers.get(id);
